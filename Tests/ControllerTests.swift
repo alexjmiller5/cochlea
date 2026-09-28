@@ -52,7 +52,7 @@ final class ControllerTests: XCTestCase {
         let controller = CaptureController(store: store, delivery: service, recordAudio: {
             let stream = StreamingAudio(session: try unrelatedStreamingSession())
             return try await recorder.capture(using: stream, start: {
-                try stream.append(streamingFixture(seconds: 2), at: nil)
+                try stream.append(streamingFixture(seconds: 4), at: nil)
                 started.fulfill()
             }, stop: {})
         }, recognize: { _ in MatchMetadata(title: "Example Song", artist: "Example Artist") })

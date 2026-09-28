@@ -92,6 +92,24 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(result?.isrc, "XX0000000001")
     }
 
+    func testImportedClipIsTrimmedToTheCatalogMaximumAndShortClipsAreRejected() async throws {
+        for (seconds, expected) in [(20, 12.0), (2, nil)] {
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".caf")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
+            let buffer = try streamingFixture(seconds: seconds)
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            try file.write(from: buffer)
+            if let expected {
+                let signature = try await AudioCapture.signature(from: url)
+                XCTAssertEqual(signature.duration, expected, accuracy: 0.1)
+            } else {
+                do { _ = try await AudioCapture.signature(from: url); XCTFail("A clip below 3 seconds can never be matched") }
+                catch { XCTAssertEqual(error.localizedDescription, CaptureError.invalidAudio.localizedDescription) }
+            }
+        }
+    }
+
     func testUploadIncludesRecordingIdentityWhenShazamProvidesIt() throws {
         let metadata = MatchMetadata(title: "Example Song", artist: "Example Artist", isrc: "XX0000000001")
         let body = try CapturePayload(id: UUID(), metadata: metadata).data()

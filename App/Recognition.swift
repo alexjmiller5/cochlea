@@ -2,6 +2,13 @@ import Foundation
 import OSLog
 import ShazamKit
 
+// Shazam's catalog only matches saved signatures of 3 to 12 seconds (SHError 201 otherwise).
+// Live streaming recognition has no such limit, so recording runs longer than the saved part.
+enum CatalogLimits {
+    static let minimumSeconds = 3.0
+    static let maximumSeconds = 12.0
+}
+
 struct MatchMetadata: Equatable, Sendable {
     let title: String
     let artist: String
@@ -64,6 +71,11 @@ final class CaptureProcessor {
                     record.state = .unmatched
                     record.lastError = "Shazam could not identify this recording."
                 }
+            } catch let error as NSError where error.domain == SHErrorDomain
+                        && error.code == SHError.Code.signatureDurationInvalid.rawValue {
+                // The catalog will never accept this length; retrying cannot help.
+                record.state = .unmatched
+                record.lastError = "This recording's length cannot be identified by Shazam."
             } catch {
                 if !(error is CancellationError) { RecognitionDiagnostics.log(error) }
                 record.lastError = "Recognition interrupted. Saved for next use."

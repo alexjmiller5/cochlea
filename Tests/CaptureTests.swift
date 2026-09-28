@@ -118,6 +118,23 @@ final class CaptureTests: XCTestCase {
         XCTAssertFalse(try store.signature(for: first).isEmpty)
     }
 
+    func testSignatureOutsideTheCatalogRangeIsUnmatchedNotRetried() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        var calls = 0
+        let processor = CaptureProcessor(store: store) { _ in
+            calls += 1
+            throw NSError(domain: SHErrorDomain, code: SHError.Code.signatureDurationInvalid.rawValue)
+        }
+        try await processor.process()
+        XCTAssertEqual(record.state, .unmatched)
+        XCTAssertTrue(record.lastError?.contains("length") == true)
+        try await processor.process()
+        XCTAssertEqual(calls, 1, "A rejected length must not be retried on every use")
+    }
+
     func testDeliveryRequiresMatchingBodyAcknowledgementAndPreservesMetadataForRetry() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -9,11 +9,37 @@ final class RecordingTests: XCTestCase {
         let recorder = AudioRecorder()
         let stream = StreamingAudio(session: try unrelatedStreamingSession())
         let audio = try await recorder.capture(using: stream, start: {
-            try stream.append(streamingFixture(seconds: 2), at: nil)
+            try stream.append(streamingFixture(seconds: 4), at: nil)
             stream.session(stream.session, didNotFindMatchFor: SHSignatureGenerator().signature(), error: URLError(.notConnectedToInternet))
         }, stop: {}, timeout: .milliseconds(30))
         XCTAssertNil(audio.metadata)
-        XCTAssertEqual(audio.signature.duration, 2, accuracy: 0.1)
+        XCTAssertEqual(audio.signature.duration, 4, accuracy: 0.1)
+    }
+
+    func testSavedSignatureStopsAtTheCatalogMaximumWhileStreamingContinues() async throws {
+        let recorder = AudioRecorder()
+        let stream = StreamingAudio(session: try unrelatedStreamingSession())
+        let audio = try await recorder.capture(using: stream, start: {
+            try stream.append(streamingFixture(seconds: 8), at: nil)
+            try stream.append(streamingFixture(seconds: 8, seed: 777), at: nil)
+        }, stop: {}, timeout: .milliseconds(30))
+        XCTAssertEqual(audio.signature.duration, CatalogLimits.maximumSeconds, accuracy: 0.1)
+    }
+
+    func testInterruptionBelowTheCatalogMinimumIsAnError() async throws {
+        let recorder = AudioRecorder()
+        let stream = StreamingAudio(session: try unrelatedStreamingSession())
+        let started = expectation(description: "recording started")
+        let task = Task { @MainActor in
+            try await recorder.capture(using: stream, start: {
+                try stream.append(streamingFixture(seconds: 2), at: nil)
+                started.fulfill()
+            }, stop: {})
+        }
+        await fulfillment(of: [started], timeout: 1)
+        interrupt()
+        do { _ = try await task.value; XCTFail("Two seconds can never be matched and must not be saved") }
+        catch { XCTAssertEqual(error.localizedDescription, CaptureError.recordingInterrupted.localizedDescription) }
     }
 
     func testInterruptionPreservesUsefulAudioAndAnOldCaptureCannotFinishTheNextOne() async throws {
@@ -59,14 +85,14 @@ final class RecordingTests: XCTestCase {
         var stopped = false
         let task = Task { @MainActor in
             try await recorder.capture(using: stream, start: {
-                try stream.append(streamingFixture(seconds: 2), at: nil)
+                try stream.append(streamingFixture(seconds: 4), at: nil)
                 started.fulfill()
             }, stop: { stopped = true })
         }
         await fulfillment(of: [started], timeout: 1)
         task.cancel()
         let audio = try await task.value
-        XCTAssertEqual(audio.signature.duration, 2, accuracy: 0.1)
+        XCTAssertEqual(audio.signature.duration, 4, accuracy: 0.1)
         XCTAssertTrue(stopped)
     }
 

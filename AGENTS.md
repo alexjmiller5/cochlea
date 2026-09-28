@@ -17,6 +17,7 @@ Device signing and installation use caller-supplied `IOS_TEAM_ID`, `IOS_PROFILE`
 - Persist the signature file and SwiftData record before saying saved.
 - Await recognition within the app or App Intent lifetime. Never start detached recognition and return from an intent. iOS 18+ capture conforms to AudioRecordingIntent and LiveActivityIntent; its ActivityKit recording activity must exist throughout microphone use. The widget shares only activity/intent declarations, never credentials or queue state. iOS 17 uses foreground continuation.
 - Explicit capture cancellation discards the current recording before persistence. System/lifetime cancellation still retains useful audio. Stale Live Activity cancel actions are scoped by recording UUID.
+- Shazam's catalog matches saved signatures of 3 to 12 seconds only (SHError 201 otherwise): the saved signature stops at 12 s while streaming recognition keeps running to the 15 s deadline; recordings under 3 s are not saved; imported clips are trimmed to their first 12 s; a duration rejection marks the capture unmatched, never retried.
 - Bound a recognition pass to three captures and a six-second timeout each. Prioritize the current capture, then previously unattempted work.
 - Persist a match before enqueueing a file-backed background URLSession upload. Reuse matched metadata on delivery retries.
 - Display and enqueue each match before slower backlog recognition. Current online identification and upload must not wait for a future invocation.
