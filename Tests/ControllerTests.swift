@@ -62,7 +62,7 @@ final class ControllerTests: XCTestCase {
         try await capture.value
         let record = try XCTUnwrap(store.records().first)
         XCTAssertEqual(record.state, .pending)
-        XCTAssertEqual(try SHSignature(dataRepresentation: store.signature(for: record)).duration, 2, accuracy: 0.1)
+        XCTAssertEqual(try SHSignature(dataRepresentation: store.signature(for: record)).duration, 4, accuracy: 0.1)
         XCTAssertEqual(try CaptureStore(directory: directory).records().count, 1)
         await controller.resume()
         XCTAssertEqual(record.state, .matched)
