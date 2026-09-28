@@ -13,6 +13,7 @@ final class StreamingAudio: NSObject, SHSessionDelegate, @unchecked Sendable {
     private let generator = SHSignatureGenerator()
     private let lock = NSLock()
     private var active = true
+    private var generatedSeconds = 0.0
     private var metadata: MatchMetadata?
     private var onMatch: (() -> Void)?
 
@@ -31,9 +32,19 @@ final class StreamingAudio: NSObject, SHSessionDelegate, @unchecked Sendable {
     func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) throws {
         lock.lock()
         guard active else { lock.unlock(); return }
-        do { try generator.append(buffer, at: time) }
-        catch { lock.unlock(); throw error }
+        // The saved signature stops at the catalog maximum; streaming keeps the whole buffer.
+        let original = buffer.frameLength
+        let rate = buffer.format.sampleRate
+        let remaining = max(0, Int((CatalogLimits.maximumSeconds - generatedSeconds) * rate))
+        if remaining < Int(original) { buffer.frameLength = AVAudioFrameCount(remaining) }
+        defer { buffer.frameLength = original }
+        if buffer.frameLength > 0 {
+            do { try generator.append(buffer, at: time) }
+            catch { lock.unlock(); throw error }
+            generatedSeconds += Double(buffer.frameLength) / rate
+        }
         lock.unlock()
+        buffer.frameLength = original
         session.matchStreamingBuffer(buffer, at: time)
     }
 
@@ -164,7 +175,7 @@ final class AudioRecorder {
         deadline?.cancel()
         deadline = nil
         let audio = stream.finish()
-        if audio.signature.duration > 0 { continuation.resume(returning: audio) }
+        if audio.signature.duration >= CatalogLimits.minimumSeconds { continuation.resume(returning: audio) }
         else { continuation.resume(throwing: error ?? CaptureError.invalidAudio) }
     }
 }

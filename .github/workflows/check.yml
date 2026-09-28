@@ -18,3 +18,14 @@ jobs:
       - run: just check
       - run: just check-mac
       - run: just test-mac
+      - name: iOS simulator tests
+        run: |
+          NAME=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin); print(next(x['name'] for v in d['devices'].values() for x in v if x['name'].startswith('iPhone')))")
+          IOS_TEST_DESTINATION="platform=iOS Simulator,name=$NAME" just test
+      - name: Test failures
+        if: failure()
+        run: |
+          for r in $(ls -td ~/Library/Developer/Xcode/DerivedData/offline-shazam*/Logs/Test/*.xcresult 2>/dev/null); do
+            echo "== $r"
+            xcrun xcresulttool get test-results summary --path "$r" | python3 -c "import json,sys; d=json.load(sys.stdin); print('total',d.get('totalTestCount'),'failed',d.get('failedTests')); [print('-',f.get('testName'),'::',f.get('failureText')) for f in d.get('testFailures',[])]"
+          done
