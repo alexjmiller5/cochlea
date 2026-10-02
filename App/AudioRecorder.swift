@@ -99,9 +99,8 @@ final class AudioRecorder {
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.channelCount > 0, [48000, 44100, 32000, 16000].contains(format.sampleRate) else {
-            throw CaptureError.invalidAudio
-        }
+        guard format.channelCount > 0, format.sampleRate > 0 else { throw CaptureError.microphoneUnavailable }
+        guard [48000, 44100, 32000, 16000].contains(format.sampleRate) else { throw CaptureError.invalidAudio }
         let stream = StreamingAudio()
         var installedTap = false
         return try await capture(using: stream, start: {

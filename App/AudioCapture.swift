@@ -82,13 +82,14 @@ final class ShazamMatcher: NSObject, SHSessionDelegate {
 }
 
 enum CaptureError: LocalizedError {
-    case invalidAudio, missingMetadata, alreadyRecording, microphoneDenied, recordingInterrupted
+    case invalidAudio, missingMetadata, alreadyRecording, microphoneDenied, microphoneUnavailable, recordingInterrupted
     var errorDescription: String? {
         switch self {
         case .invalidAudio: return "Use a readable audio clip between 3 and 30 seconds long."
         case .missingMetadata: return "Shazam returned incomplete song details. The capture is saved for another attempt."
         case .alreadyRecording: return "A capture is already in progress."
         case .microphoneDenied: return "Allow microphone access in \(Runtime.deviceName == "Mac" ? "System Settings" : "iPhone Settings") to capture music."
+        case .microphoneUnavailable: return "No microphone is available to record."
         case .recordingInterrupted: return "The recording was interrupted before 3 seconds were saved. Please try again."
         }
     }

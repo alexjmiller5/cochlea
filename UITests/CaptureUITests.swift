@@ -1,19 +1,19 @@
 import XCTest
 
 final class CaptureUITests: XCTestCase {
-    func testAccidentalCaptureCanBeCanceledAndStartedAgain() {
+    func testAccidentalCaptureCanBeCanceledAndStartedAgain() throws {
         let app = XCUIApplication()
-        addUIInterruptionMonitor(withDescription: "Native capture permissions") { alert in
-            if alert.buttons["Allow"].exists { alert.buttons["Allow"].tap(); return true }
-            if alert.buttons["OK"].exists { alert.buttons["OK"].tap(); return true }
-            return false
-        }
         app.launch()
+        allowSystemPrompts()
         let capture = app.buttons["Capture song"]
         XCTAssertTrue(capture.waitForExistence(timeout: 5))
         capture.tap()
-        // A harmless interaction lets the interruption monitor dismiss the microphone prompt.
-        app.navigationBars.firstMatch.tap()
+        // On a fresh simulator the microphone prompt appears after the first tap; answer it
+        // before touching the app, or it swallows the Cancel tap.
+        allowSystemPrompts()
+        if app.staticTexts["No microphone is available to record."].waitForExistence(timeout: 2) {
+            throw XCTSkip("This host has no audio input, so the simulator cannot record")
+        }
         let cancel = app.buttons["Cancel capture"]
         XCTAssertTrue(cancel.waitForExistence(timeout: 5))
         cancel.tap()
@@ -27,6 +27,16 @@ final class CaptureUITests: XCTestCase {
         add(listening)
         cancel.tap()
         XCTAssertTrue(capture.waitForExistence(timeout: 3))
+    }
+
+    /// Answers the notification and microphone permission alerts, whichever are showing.
+    private func allowSystemPrompts() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let alert = springboard.alerts.firstMatch
+        for _ in 0..<3 where alert.waitForExistence(timeout: 2) {
+            let allow = alert.buttons["Allow"]
+            (allow.exists ? allow : alert.buttons.element(boundBy: alert.buttons.count - 1)).tap()
+        }
     }
 
     func testSavedConnectionIsRestoredAfterRelaunch() {

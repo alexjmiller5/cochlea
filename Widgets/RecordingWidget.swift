@@ -32,17 +32,14 @@ struct RecordingWidget: Widget {
                     }
                 }
             }
+            // System colors: the iOS 27 Lock Screen material is light or dark with the
+            // appearance, so forced white text disappears on the light one.
             .padding()
-            .activityBackgroundTint(.black)
-            .activitySystemActionForegroundColor(.white)
-            .foregroundStyle(.white)
         } dynamicIsland: { context in
             let outcome = context.state.outcome
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    if let outcome {
-                        OutcomeIcon(outcome: outcome).font(.title2)
-                    } else {
+                    if outcome == nil {
                         Label(context.isStale ? "Capture ended" : "Listening", systemImage: "waveform")
                             .font(.headline)
                             .foregroundStyle(.purple)
@@ -51,11 +48,15 @@ struct RecordingWidget: Widget {
                 DynamicIslandExpandedRegion(.trailing) {
                     if outcome == nil, !context.isStale { cancelButton(context.attributes.recordingID) }
                 }
-                DynamicIslandExpandedRegion(.center) {
-                    if let outcome { OutcomeText(outcome: outcome) }
-                }
                 DynamicIslandExpandedRegion(.bottom) {
-                    if outcome == nil, !context.isStale {
+                    if let outcome {
+                        // One row under the camera keeps the icon level with the song.
+                        HStack(spacing: 12) {
+                            OutcomeIcon(outcome: outcome).font(.title)
+                            OutcomeText(outcome: outcome)
+                        }
+                        .padding(.horizontal, 8)
+                    } else if !context.isStale {
                         ProgressView(timerInterval: context.state.startedAt...context.state.deadline, countsDown: false)
                             .tint(.purple)
                             .accessibilityLabel("Recording progress")
@@ -91,7 +92,7 @@ struct RecordingWidget: Widget {
                 .frame(minHeight: 44)
         }
         .buttonStyle(.bordered)
-        .tint(.white)
+        .tint(.purple)
         .accessibilityLabel("Cancel and discard capture")
     }
 }

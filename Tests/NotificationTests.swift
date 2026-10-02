@@ -16,6 +16,15 @@ final class NotificationTests: XCTestCase {
         center.delegate = presentation
         let allowed = try await center.requestAuthorization(options: [.provisional, .alert, .sound])
         XCTAssertTrue(allowed, "Native notification tests require provisional simulator authorization")
+        // Some iOS 27 simulators refuse every scheduled notification ("Source is not
+        // authorized", UNErrorDomain 2003) even when authorized; these native tests cannot run there.
+        do {
+            try await center.add(UNNotificationRequest(identifier: "authorization-probe", content: UNMutableNotificationContent(),
+                                                       trigger: UNTimeIntervalNotificationTrigger(timeInterval: 60, repeats: false)))
+            center.removePendingNotificationRequests(withIdentifiers: ["authorization-probe"])
+        } catch let error as NSError where error.domain == UNErrorDomain {
+            throw XCTSkip("This simulator refuses to schedule notifications (UNErrorDomain \(error.code)); use one that accepts them")
+        }
     }
 
     override func tearDown() async throws {

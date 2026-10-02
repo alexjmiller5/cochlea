@@ -44,7 +44,7 @@ The waveform and status icons are from [Tabler](https://icon-sets.iconify.design
 
 ## Recording and notifications
 
-Tap the capture button again to cancel an accidental recording. Explicit Cancel discards that recording; an interruption retains useful audio for the next use. The Dynamic Island and Lock Screen recording activity also have Cancel. The activity runs only for the requested recording, up to 15 seconds.
+Tap the capture button again to cancel an accidental recording. Explicit Cancel discards that recording; an interruption retains useful audio for the next use. The Dynamic Island and Lock Screen recording activity also have Cancel. The activity runs only for the requested recording, up to 15 seconds, then shows the result for a few seconds: the song and artist, "No match", or "Saved for later" when offline.
 
 On iOS 18+, the Capture song Shortcut uses the native audio-recording intent and runs without opening the app, including when the app was previously swiped away. Enable Live Activities in the app's system settings. iOS 17 asks to continue in the foreground. Microphone access, native notification authorization and Live Activities are user settings; a replacement phone must be enrolled again with its own Music Sync token.
 
