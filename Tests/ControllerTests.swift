@@ -126,9 +126,11 @@ final class ControllerTests: XCTestCase {
             return MatchMetadata(title: "Example Song", artist: "Example Artist")
         })
         let capture = Task { _ = try await controller.capture() }
-        await fulfillment(of: [backlogStarted], timeout: 2)
+        // The backlog sleeps 60 s, so any wait under that still proves the
+        // upload overtook it; short waits flaked on loaded CI runners.
+        await fulfillment(of: [backlogStarted], timeout: 10)
         XCTAssertEqual(controller.records.first(where: { $0.id != older.id })?.metadata?.title, "Example Song")
-        await fulfillment(of: [uploaded], timeout: 1)
+        await fulfillment(of: [uploaded], timeout: 10)
         capture.cancel()
         _ = try await capture.value
         service.session.finishTasksAndInvalidate()
