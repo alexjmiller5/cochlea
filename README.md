@@ -4,7 +4,7 @@ Identify music on an iPhone or Mac as you listen with Apple's ShazamKit. Offline
 
 ## Use
 
-1. Open Settings and enter the Music Sync capture URL and a capture-only access token. Save connection checks that Music Sync accepts the pair and stores it in the iOS Keychain. Allow microphone access and song notifications when prompted.
+1. Open the enrollment link Music Sync's operator sends you (`just clients issue "<device>"` in the music-sync repo) on the phone and tap **Open in Offline Shazam**; or open Settings and enter the capture URL and capture-only access token by hand. Either way the app checks that Music Sync accepts the pair and stores it in the iOS Keychain. Allow microphone access and song notifications when prompted.
 2. Tap **Capture song**, or use the **Capture song** App Shortcut. Shazam listens and stops recording as soon as it identifies the song. If there is no early match, the app saves the first 12 seconds as a Shazam signature for later identification (Shazam accepts saved signatures of 3 to 12 seconds); recordings shorter than 3 seconds are discarded.
 3. Check recent captures for their status: saved for identification, needs connection, sending, retrying, or confirmed **Added to Spotify**. There is no manual sync step. Saving a connection automatically starts delivery of already identified songs.
 
@@ -30,7 +30,7 @@ IOS_TEAM_ID='<developer-team>' IOS_PROFILE='<ad-hoc-profile>' IOS_DEVICE_ID='<de
 
 For a device build, sign into your Apple Developer account in Xcode Settings. Set the app's bundle identifier in `project.yml` if building under another publisher. Register that explicit identifier and enable **ShazamKit** under **App Services** in the [Apple Developer account](https://developer.apple.com/help/account/services/shazamkit). ShazamKit is an App ID service, not a code-signing entitlement: do not add a `com.apple.developer.shazamkit` entitlement. For a stable installation, supply an Apple Distribution identity and an Ad Hoc profile for that App ID and phone. The embedded recording Live Activity uses the app identifier with `.activity` appended; provide an Ad Hoc profile covering that identifier and the same phone/certificate through `IOS_ACTIVITY_PROFILE` (a matching wildcard profile is sufficient). `IOS_PROFILE` signs the main app. The local `deploy` recipe builds and installs the app; this repository has no automatic deployment workflow.
 
-Allow microphone access on the phone when prompted. On a replacement phone, reinstall and issue a new capture-only Music Sync token, then enter it in Settings. Revoke the old device's token through Music Sync. The Keychain credential is device-bound. Local pending captures are not a cross-device sync service.
+Allow microphone access on the phone when prompted. On a replacement phone, reinstall and open a new enrollment link (a new capture-only Music Sync token). Revoke the old device's token through Music Sync. The Keychain credential is device-bound. Local pending captures are not a cross-device sync service.
 
 ## Service contract
 
