@@ -40,6 +40,27 @@ enum Runtime {
         return controller
     }
 
+    /// An enrollment link (`offlineshazam://enroll?url=&token=`, opened from
+    /// Music Sync's enrollment page): save the connection like Settings does,
+    /// say so, and send whatever was waiting.
+    @MainActor
+    static func enroll(_ link: URL) {
+        guard case .success(let controller) = controller,
+              let configuration = try? DeliveryConfiguration.fromEnrollLink(link),
+              (try? connection.save(configuration)) != nil else { return }
+        Task {
+            try? await controller.delivery.connectionChanged()
+            let verified = await controller.delivery.verifyConnection()
+            let content = UNMutableNotificationContent()
+            content.title = verified ? "Connected to Music Sync" : "Music Sync connection saved"
+            content.body = verified ? "Waiting songs are sending automatically."
+                : (controller.delivery.connectionIssue ?? "Songs will retry automatically.")
+            try? await UNUserNotificationCenter.current().add(
+                UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+            await controller.resume()
+        }
+    }
+
     // Reconnecting resumes queued work while the app is running.
     static func startConnectivityMonitor(_ monitor: NWPathMonitor) {
         monitor.pathUpdateHandler = { path in

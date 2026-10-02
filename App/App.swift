@@ -22,12 +22,15 @@ struct OfflineShazamApp: App {
 
     private var mainWindow: some Scene {
         WindowGroup(id: "main") {
-            switch Runtime.controller {
-            case .success(let controller): ContentView(controller: controller)
-            case .failure:
-                ContentUnavailableView("Captures unavailable", systemImage: "externaldrive.badge.exclamationmark",
-                                       description: Text("Unlock your \(Runtime.deviceName) and reopen the app. Existing captures have not been removed."))
+            Group {
+                switch Runtime.controller {
+                case .success(let controller): ContentView(controller: controller)
+                case .failure:
+                    ContentUnavailableView("Captures unavailable", systemImage: "externaldrive.badge.exclamationmark",
+                                           description: Text("Unlock your \(Runtime.deviceName) and reopen the app. Existing captures have not been removed."))
+                }
             }
+            .onOpenURL { Runtime.enroll($0) }
         }
     }
 }

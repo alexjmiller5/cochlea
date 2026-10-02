@@ -29,6 +29,19 @@ struct DeliveryConfiguration: Codable {
     }
 }
 
+extension DeliveryConfiguration {
+    static let enrollScheme = "offlineshazam"
+
+    /// `offlineshazam://enroll?url=<capture URL>&token=<token>`, opened from Music
+    /// Sync's enrollment page. nil for any other link; throws on unusable values.
+    static func fromEnrollLink(_ link: URL) throws -> DeliveryConfiguration? {
+        guard link.scheme?.lowercased() == enrollScheme, link.host?.lowercased() == "enroll" else { return nil }
+        let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        let value = { (name: String) in items.first { $0.name == name }?.value ?? "" }
+        return try DeliveryConfiguration(endpoint: value("url"), token: value("token"))
+    }
+}
+
 enum ConfigurationError: LocalizedError {
     case invalidEndpoint, invalidToken(String), keychain(OSStatus)
     var errorDescription: String? {

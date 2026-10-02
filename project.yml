@@ -31,6 +31,10 @@ targets:
         NSSupportsLiveActivities: true
         UIBackgroundModes: [audio]
         ITSAppUsesNonExemptEncryption: false
+        # offlineshazam://enroll?url=&token= from Music Sync's enrollment page
+        CFBundleURLTypes:
+          - CFBundleURLName: offlineshazam
+            CFBundleURLSchemes: [offlineshazam]
     dependencies:
       - target: OfflineShazamActivity
   OfflineShazamActivity:
@@ -71,6 +75,9 @@ targets:
         CFBundleDisplayName: Offline Shazam
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
         LSApplicationCategoryType: public.app-category.music
+        CFBundleURLTypes:
+          - CFBundleURLName: offlineshazam
+            CFBundleURLSchemes: [offlineshazam]
     entitlements:
       path: Mac/OfflineShazam.entitlements
       properties:
