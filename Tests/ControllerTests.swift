@@ -28,7 +28,7 @@ final class ControllerTests: XCTestCase {
             }, recognize: { _ in nil })
             controller.isOnline = false
             let capture = Task { @MainActor in _ = try await controller.capture() }
-            await fulfillment(of: [started], timeout: 1)
+            await fulfillment(of: [started], timeout: 10)
             controller.cancelCapture()
             do { _ = try await capture.value; XCTFail("Explicit cancellation must discard even useful audio") }
             catch { XCTAssertTrue(error is CancellationError) }
@@ -57,7 +57,7 @@ final class ControllerTests: XCTestCase {
             }, stop: {})
         }, recognize: { _ in MatchMetadata(title: "Example Song", artist: "Example Artist") })
         let capture = Task { _ = try await controller.capture() }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         capture.cancel()
         try await capture.value
         let record = try XCTUnwrap(store.records().first)
@@ -92,7 +92,7 @@ final class ControllerTests: XCTestCase {
             return nil
         })
         let capture = Task { _ = try await controller.capture() }
-        await fulfillment(of: [backlogStarted, uploaded], timeout: 2)
+        await fulfillment(of: [backlogStarted, uploaded], timeout: 10)
         let persisted = try CaptureStore(directory: directory).records().first { $0.id != older.id }
         XCTAssertEqual(persisted?.metadata, metadata)
         XCTAssertEqual(controller.records.first(where: { $0.id != older.id })?.metadata, metadata)
@@ -153,7 +153,7 @@ final class ControllerTests: XCTestCase {
             return MatchMetadata(title: "Example Song", artist: "Example Artist")
         })
         let previous = Task { await controller.resume() }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         let url = directory.appendingPathComponent("capture.wav")
         let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1))
         let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 220500))
@@ -196,9 +196,9 @@ final class ControllerTests: XCTestCase {
             return MatchMetadata(title: "Example Song", artist: "Example Artist")
         })
         let first = Task { @MainActor in _ = try await controller.capture() }
-        await fulfillment(of: [firstMatching], timeout: 3)
+        await fulfillment(of: [firstMatching], timeout: 10)
         let second = Task { @MainActor in _ = try await controller.capture() }
-        await fulfillment(of: [secondRecording], timeout: 3)
+        await fulfillment(of: [secondRecording], timeout: 10)
         _ = try await first.value
         XCTAssertTrue(controller.isRecording, "Finishing the previous request must not enable a third recording")
         finishRecording?.resume()

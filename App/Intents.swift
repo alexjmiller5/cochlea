@@ -19,11 +19,16 @@ struct CaptureSongIntent: CaptureSongIntentKind {
         if #available(iOS 18, *) { requiresLiveActivity = true }
         else { try await requestToContinueInForeground() }
         #endif
+        let controller = try Runtime.controller.get()
+        let record: CaptureRecord
         do {
-            _ = try await Runtime.controller.get().capture(requiresLiveActivity: requiresLiveActivity)
+            record = try await controller.capture(requiresLiveActivity: requiresLiveActivity)
         } catch is CancellationError {
             return .result(value: "Capture canceled")
         }
+        // Keep the run alive until the Dynamic Island has shown the result.
+        await controller.recordingActivity?.waitUntilDismissed()
+        if let title = record.title, let artist = record.artist { return .result(value: "\(title) by \(artist)") }
         return .result(value: "Capture saved")
     }
 }

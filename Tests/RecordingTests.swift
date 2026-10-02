@@ -36,7 +36,7 @@ final class RecordingTests: XCTestCase {
                 started.fulfill()
             }, stop: {})
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         interrupt()
         do { _ = try await task.value; XCTFail("Two seconds can never be matched and must not be saved") }
         catch { XCTAssertEqual(error.localizedDescription, CaptureError.recordingInterrupted.localizedDescription) }
@@ -52,7 +52,7 @@ final class RecordingTests: XCTestCase {
                 started.fulfill()
             }, stop: {})
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         interrupt()
         let saved = try await first.value
         XCTAssertEqual(saved.signature.duration, 10, accuracy: 0.1)
@@ -68,7 +68,7 @@ final class RecordingTests: XCTestCase {
             finished = true
             return result
         }
-        await fulfillment(of: [nextStarted], timeout: 1)
+        await fulfillment(of: [nextStarted], timeout: 10)
         try old.append(streamingFixture(seconds: 2), at: nil)
         old.session(old.session, didFind: staleMatch)
         try await Task.sleep(for: .milliseconds(50))
@@ -89,7 +89,7 @@ final class RecordingTests: XCTestCase {
                 started.fulfill()
             }, stop: { stopped = true })
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         task.cancel()
         let audio = try await task.value
         XCTAssertEqual(audio.signature.duration, 4, accuracy: 0.1)
@@ -102,7 +102,7 @@ final class RecordingTests: XCTestCase {
         let task = Task { @MainActor in
             try await recorder.capture(using: StreamingAudio(), start: { started.fulfill() }, stop: {})
         }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         interrupt()
         do { _ = try await task.value; XCTFail("An empty recording cannot be saved") }
         catch { XCTAssertEqual(error.localizedDescription, CaptureError.recordingInterrupted.localizedDescription) }

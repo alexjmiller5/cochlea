@@ -6,31 +6,57 @@ import XCTest
 
 @MainActor
 final class RecordingActivityTests: XCTestCase {
-    func testLiveActivitySurroundsRecordingAndEndsBeforeRecognition() async throws {
+    func testLiveActivityShowsTheRecognizedSongThenDismissesAfterTheHold() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CaptureStore(directory: directory)
         let service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
             connection: { nil }, sessionConfiguration: .ephemeral)
         var events: [String] = []
-        let activity = RecordingActivity { attributes, state in
+        let activity = RecordingActivity(resultDuration: .milliseconds(300)) { _, state in
             XCTAssertEqual(state.deadline.timeIntervalSince(state.startedAt), 15, accuracy: 0.01)
+            XCTAssertNil(state.outcome, "Recording starts without a result")
             events.append("activity")
-            return { events.append("end") }
+            return RecordingActivity.Handle(update: { events.append("show \($0)") }, end: { events.append("end") })
         }
         let controller = CaptureController(store: store, delivery: service, recordAudio: {
             XCTAssertEqual(events, ["activity"])
             events.append("record")
-            return CapturedAudio(signature: SHSignatureGenerator().signature())
-        }, recognize: { _ in
-            XCTAssertEqual(events, ["activity", "record", "end"])
-            events.append("recognize")
-            return nil
-        }, recordingActivity: activity)
+            return CapturedAudio(signature: SHSignatureGenerator().signature(),
+                                 metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        }, recognize: { _ in nil }, recordingActivity: activity)
         _ = try await controller.capture(requiresLiveActivity: true)
-        XCTAssertEqual(events, ["activity", "record", "end", "recognize"])
-        XCTAssertEqual(try store.records().count, 1)
+        XCTAssertEqual(events, ["activity", "record",
+                                "show \(RecordingAttributes.Outcome.recognized(title: "Example Song", artist: "Example Artist"))"],
+                       "The result replaces the recording state and stays visible for the hold")
+        let shown = Date()
+        await activity.waitUntilDismissed()
+        XCTAssertEqual(events.last, "end")
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(shown), 0.25, "The result must stay up for the hold")
+        XCTAssertEqual(try store.records().first?.state, .matched)
         service.session.finishTasksAndInvalidate()
+    }
+
+    func testLiveActivityShowsNoMatchOnlineAndSavedOffline() async throws {
+        for (online, expected) in [(true, RecordingAttributes.Outcome.noMatch), (false, .savedForLater)] {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            let store = try CaptureStore(directory: directory)
+            let service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
+                connection: { nil }, sessionConfiguration: .ephemeral)
+            var shown: [RecordingAttributes.Outcome] = []
+            let activity = RecordingActivity(resultDuration: .milliseconds(10)) { _, _ in
+                RecordingActivity.Handle(update: { shown.append($0) }, end: {})
+            }
+            let controller = CaptureController(store: store, delivery: service, recordAudio: {
+                CapturedAudio(signature: SHSignatureGenerator().signature())
+            }, recognize: { _ in nil }, recordingActivity: activity)
+            controller.isOnline = online
+            _ = try await controller.capture(requiresLiveActivity: true)
+            await activity.waitUntilDismissed()
+            XCTAssertEqual(shown, [expected])
+            service.session.finishTasksAndInvalidate()
+        }
     }
 
     func testRequiredLiveActivityFailurePreventsRecordingButForegroundCaptureStillWorks() async throws {
@@ -66,9 +92,10 @@ final class RecordingActivityTests: XCTestCase {
         let started = expectation(description: "recording started")
         var activeID: UUID?
         var ended = false
+        var shown = false
         let activity = RecordingActivity { attributes, _ in
             activeID = attributes.recordingID
-            return { ended = true }
+            return RecordingActivity.Handle(update: { _ in shown = true }, end: { ended = true })
         }
         let controller = CaptureController(store: store, delivery: service, recordAudio: {
             started.fulfill()
@@ -76,7 +103,7 @@ final class RecordingActivityTests: XCTestCase {
             return CapturedAudio(signature: SHSignatureGenerator().signature())
         }, recognize: { _ in nil }, recordingActivity: activity)
         let capture = Task { @MainActor in _ = try await controller.capture(requiresLiveActivity: true) }
-        await fulfillment(of: [started], timeout: 1)
+        await fulfillment(of: [started], timeout: 10)
         controller.cancelCapture(id: UUID())
         XCTAssertTrue(controller.isRecording)
         XCTAssertFalse(ended)
@@ -84,6 +111,7 @@ final class RecordingActivityTests: XCTestCase {
         do { try await capture.value; XCTFail("The current activity must cancel recording") }
         catch { XCTAssertTrue(error is CancellationError) }
         XCTAssertTrue(ended)
+        XCTAssertFalse(shown, "A canceled capture ends without a result")
         XCTAssertTrue(try store.records().isEmpty)
         service.session.finishTasksAndInvalidate()
     }

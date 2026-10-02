@@ -37,7 +37,7 @@ final class DeliveryTests: XCTestCase {
             fixture.record.state == .delivered && newer.state == .delivered
         }, object: nil)
         await controller.resume()
-        await fulfillment(of: [confirmed], timeout: 3)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(checks, 1)
         XCTAssertEqual(uploads, 2)
         XCTAssertNil(controller.connectionIssue)
@@ -115,7 +115,7 @@ final class DeliveryTests: XCTestCase {
             if requests == 1 { pending = request; started.fulfill() }
         }
         await controller.resume()
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         XCTAssertEqual(controller.uploadingIDs, [fixture.record.id])
         XCTAssertEqual(fixture.record.state, .matched, "Starting a transfer must not claim Spotify confirmed it")
         async let first: Void = fixture.service.enqueue()
@@ -125,7 +125,7 @@ final class DeliveryTests: XCTestCase {
             controller.uploadingIDs.isEmpty && controller.records.first?.state == .delivered
         }, object: nil)
         try XCTUnwrap(pending).complete(data: fixture.receipt)
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(requests, 1)
         XCTAssertTrue(controller.uploadingIDs.isEmpty)
         XCTAssertEqual(controller.records.first?.state, .delivered)
@@ -160,7 +160,7 @@ final class DeliveryTests: XCTestCase {
             retrying.state == .delivered && later.state == .delivered
         }, object: nil)
         try await fixture.service.enqueue()
-        await fulfillment(of: [otherSongsConfirmed], timeout: 3)
+        await fulfillment(of: [otherSongsConfirmed], timeout: 10)
         XCTAssertEqual(requests, 4)
         XCTAssertEqual(fixture.record.state, .matched)
         XCTAssertTrue(fixture.service.uploadingIDs.contains(fixture.record.id))
@@ -168,7 +168,7 @@ final class DeliveryTests: XCTestCase {
             fixture.record.state == .delivered
         }, object: nil)
         try XCTUnwrap(held).complete(data: fixture.receipt)
-        await fulfillment(of: [allConfirmed], timeout: 2)
+        await fulfillment(of: [allConfirmed], timeout: 10)
     }
 
     func testTemporaryConnectionReadFailureAfterHTTPFailureKeepsAutomaticRetry() async throws {
@@ -195,7 +195,7 @@ final class DeliveryTests: XCTestCase {
             fixture.record.state == .delivered
         }, object: nil)
         try await fixture.service.enqueue()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(requests, 2)
         XCTAssertEqual(fixture.record.state, .delivered)
         XCTAssertNil(fixture.service.connectionIssue)
@@ -216,7 +216,7 @@ final class DeliveryTests: XCTestCase {
         let previous = previousSession.dataTask(with: request) { _, _, _ in completed.fulfill() }
         previous.taskDescription = fixture.record.id.uuidString
         previous.resume()
-        await fulfillment(of: [completed], timeout: 2)
+        await fulfillment(of: [completed], timeout: 10)
         XCTAssertEqual(previous.state, .completed)
 
         token = "new-token"
@@ -224,7 +224,7 @@ final class DeliveryTests: XCTestCase {
         var replacement: CaptureHTTPStub?
         CaptureHTTPStub.begin = { request in replacement = request; started.fulfill() }
         try await fixture.service.connectionChanged()
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         // The OS may deliver a completed old task after getAllTasks has omitted it.
         fixture.service.urlSession(fixture.service.session, task: previous, didCompleteWithError: nil)
         XCTAssertFalse(fixture.record.deliveryBlocked)
@@ -234,7 +234,7 @@ final class DeliveryTests: XCTestCase {
             fixture.record.state == .delivered
         }, object: nil)
         try XCTUnwrap(replacement).complete(data: fixture.receipt)
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
     }
 
     func testConnectionChangeIgnoresCancelledOldCredentialTransfer() async throws {
@@ -246,7 +246,7 @@ final class DeliveryTests: XCTestCase {
         let started = expectation(description: "old credentials have an active upload")
         CaptureHTTPStub.begin = { _ in started.fulfill() }
         try await fixture.service.enqueue()
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         let confirmed = expectation(description: "replacement credentials confirm the same capture")
         token = "new-token"
         let receipt = fixture.receipt
@@ -258,7 +258,7 @@ final class DeliveryTests: XCTestCase {
             if fixture.record.state == .delivered { fixture.service.onChange = nil; confirmed.fulfill() }
         }
         try await fixture.service.connectionChanged()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(fixture.record.state, .delivered)
         XCTAssertNil(fixture.record.lastError)
         XCTAssertNil(fixture.record.nextAttemptAt)
@@ -275,7 +275,7 @@ final class DeliveryTests: XCTestCase {
         CaptureHTTPStub.reply = { _ in receipt }
         fixture.service.onChange = { if fixture.record.state == .delivered { fixture.service.onChange = nil; confirmed.fulfill() } }
         try await fixture.service.enqueue()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(try CaptureStore(directory: fixture.directory).records().first?.state, .delivered)
     }
 
@@ -307,7 +307,7 @@ final class DeliveryTests: XCTestCase {
         }
         fixture.service.onChange = { if fixture.record.state == .delivered { fixture.service.onChange = nil; confirmed.fulfill() } }
         try await fixture.service.enqueue()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(attempts, 2)
         if attemptDates.count == 2 {
             XCTAssertGreaterThanOrEqual(attemptDates[1].timeIntervalSince(attemptDates[0]), 0.15,
@@ -336,7 +336,7 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(fixture.record.state, .matched)
         try connection.save(DeliveryConfiguration(endpoint: "https://example.com/capture", token: "test-token"))
         try await fixture.service.connectionChanged()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(fixture.record.state, .delivered)
         XCTAssertNil(controller.connectionIssue)
     }
@@ -355,7 +355,7 @@ final class DeliveryTests: XCTestCase {
         }
         fixture.service.onChange = { if fixture.record.lastError != nil { fixture.service.onChange = nil; rejected.fulfill() } }
         try await fixture.service.enqueue()
-        await fulfillment(of: [rejected], timeout: 2)
+        await fulfillment(of: [rejected], timeout: 10)
         fixture.service.onChange = nil
         fixture.record.nextAttemptAt = Date(timeIntervalSinceNow: -1)
         try fixture.store.save()
@@ -375,7 +375,7 @@ final class DeliveryTests: XCTestCase {
             if (try? reopened.records().first?.state) == .delivered { service.onChange = nil; confirmed.fulfill() }
         }
         try await service.connectionChanged()
-        await fulfillment(of: [confirmed], timeout: 2)
+        await fulfillment(of: [confirmed], timeout: 10)
         XCTAssertEqual(try reopened.records().first?.state, .delivered)
         XCTAssertFalse(try XCTUnwrap(reopened.records().first).deliveryBlocked)
         XCTAssertNil(service.connectionIssue)

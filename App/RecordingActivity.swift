@@ -13,30 +13,55 @@ enum RecordingActivityError: LocalizedError {
 
 @MainActor
 final class RecordingActivity {
-    typealias End = @MainActor () async -> Void
-    typealias Request = @MainActor (RecordingAttributes, RecordingAttributes.ContentState) async throws -> End
+    struct Handle {
+        let update: @MainActor (RecordingAttributes.Outcome) async -> Void
+        let end: @MainActor () async -> Void
+    }
+    typealias Request = @MainActor (RecordingAttributes, RecordingAttributes.ContentState) async throws -> Handle
 
     private let request: Request
-    private var finish: End?
+    private let resultDuration: Duration
+    private var handle: Handle?
+    private var dismissal: Task<Void, Never>?
 
-    init(request: Request? = nil) {
+    init(resultDuration: Duration = .seconds(5), request: Request? = nil) {
+        self.resultDuration = resultDuration
         self.request = request ?? Self.requestActivity
     }
 
     func start(id: UUID) async throws {
         let now = Date()
-        finish = try await request(RecordingAttributes(recordingID: id),
+        handle = try await request(RecordingAttributes(recordingID: id),
             .init(startedAt: now, deadline: now.addingTimeInterval(15)))
     }
 
+    /// Ends immediately: cancellation, failures, or a recording that was never saved.
     func end() async {
-        let finish = finish
-        self.finish = nil
-        await finish?()
+        let handle = handle
+        self.handle = nil
+        await handle?.end()
+    }
+
+    /// Replaces the recording state with the capture's result and dismisses it after
+    /// the hold, so the Dynamic Island confirms what happened instead of vanishing.
+    func finish(showing outcome: RecordingAttributes.Outcome) async {
+        guard let handle else { return }
+        self.handle = nil
+        await handle.update(outcome)
+        let hold = resultDuration
+        dismissal = Task { @MainActor in
+            try? await Task.sleep(for: hold)
+            await handle.end()
+        }
+    }
+
+    /// A Shortcut run awaits this so the process stays alive until the result is dismissed.
+    func waitUntilDismissed() async {
+        await dismissal?.value
     }
 
     private static func requestActivity(attributes: RecordingAttributes,
-                                        state: RecordingAttributes.ContentState) async throws -> End {
+                                        state: RecordingAttributes.ContentState) async throws -> Handle {
         #if !os(iOS)
         throw RecordingActivityError.unavailable
         #else
@@ -53,7 +78,12 @@ final class RecordingActivity {
         } catch {
             throw RecordingActivityError.unavailable
         }
-        return { await activity.end(nil, dismissalPolicy: .immediate) }
+        return Handle(update: { outcome in
+            var result = state
+            result.outcome = outcome
+            // A short stale date keeps a suspended process from leaving the result up for hours.
+            await activity.update(ActivityContent(state: result, staleDate: Date().addingTimeInterval(30)))
+        }, end: { await activity.end(nil, dismissalPolicy: .immediate) })
         #endif
     }
 }

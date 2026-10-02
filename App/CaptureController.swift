@@ -73,9 +73,7 @@ final class CaptureController {
                     throw RecordingActivityError.unavailable
                 }
                 try Task.checkCancellation()
-                let audio = try await recordAudio()
-                await recordingActivity?.end()
-                return audio
+                return try await recordAudio()
             } catch {
                 await recordingActivity?.end()
                 throw error
@@ -85,10 +83,21 @@ final class CaptureController {
         let audio = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         // OS/lifetime cancellation may preserve useful audio. Only the user's
         // explicit cancel action discards it before anything reaches the queue.
-        guard !discardRecording else { throw CancellationError() }
-        let record = try store.capture(signature: audio.signature)
-        if let metadata = audio.metadata { try store.matched(record, metadata: metadata) }
-        return record
+        guard !discardRecording else {
+            await recordingActivity?.end()
+            throw CancellationError()
+        }
+        do {
+            let record = try store.capture(signature: audio.signature)
+            if let metadata = audio.metadata { try store.matched(record, metadata: metadata) }
+            // Shown only once the capture is durable, so "saved" is never a promise.
+            await recordingActivity?.finish(showing: audio.metadata.map { .recognized(title: $0.title, artist: $0.artist) }
+                                            ?? (isOnline ? .noMatch : .savedForLater))
+            return record
+        } catch {
+            await recordingActivity?.end()
+            throw error
+        }
     }
 
     func importAudio(_ url: URL) async throws -> CaptureRecord {

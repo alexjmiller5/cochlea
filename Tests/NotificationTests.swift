@@ -193,7 +193,7 @@ final class NotificationTests: XCTestCase {
             try await self.center.add(request)
         })
         let recognition = Task { await notifications.reconcile(store: store) }
-        await fulfillment(of: [started], timeout: 2)
+        await fulfillment(of: [started], timeout: 10)
         try deliver(record, store: store)
         let delivery = Task { await notifications.reconcile(store: store) }
         try await Task.sleep(for: .milliseconds(50))

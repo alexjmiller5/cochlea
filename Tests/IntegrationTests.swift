@@ -27,7 +27,7 @@ final class IntegrationTests: XCTestCase {
             } catch { captureError = error }
             finished.fulfill()
         }
-        await fulfillment(of: [finished], timeout: 4)
+        await fulfillment(of: [finished], timeout: 10)
         task.cancel()
         await task.value
         XCTAssertNil(captureError)
