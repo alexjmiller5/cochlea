@@ -21,3 +21,14 @@ final class EnrollLinkTests: XCTestCase {
         }
     }
 }
+
+final class ConnectionStoreTests: XCTestCase {
+    func testDeleteForgetsTheSavedConnection() throws {
+        let store = ConnectionStore(service: "offline-shazam.tests.\(UUID().uuidString)")
+        try store.save(DeliveryConfiguration(endpoint: "https://ws--capture-consumer.modal.run", token: "tok"))
+        XCTAssertEqual(try store.load()?.token, "tok")
+        try store.delete()
+        XCTAssertNil(try store.load())
+        try store.delete()  // deleting nothing is fine
+    }
+}

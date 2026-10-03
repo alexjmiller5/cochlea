@@ -4,7 +4,7 @@ Identify music on an iPhone or Mac as you listen with Apple's ShazamKit. Offline
 
 ## Use
 
-1. Open the enrollment link Music Sync's operator sends you (`just clients issue "<device>"` in the music-sync repo) on the phone and tap **Open in Offline Shazam**; or open Settings and enter the capture URL and capture-only access token by hand. Either way the app checks that Music Sync accepts the pair and stores it in the iOS Keychain. Allow microphone access and song notifications when prompted.
+1. Open the enrollment link Music Sync's operator sends you (`just clients issue "<device>"` in the music-sync repo) on the phone and tap **Open in Offline Shazam**. The app checks that Music Sync accepts the connection and stores it in the iOS Keychain; Settings shows which service it is connected to and can disconnect, but the URL and token are never typed in. Allow microphone access and song notifications when prompted.
 2. Tap **Capture song**, or use the **Capture song** App Shortcut. Shazam listens and stops recording as soon as it identifies the song. If there is no early match, the app saves the first 12 seconds as a Shazam signature for later identification (Shazam accepts saved signatures of 3 to 12 seconds); recordings shorter than 3 seconds are discarded.
 3. Check recent captures for their status: saved for identification, needs connection, sending, retrying, or confirmed **Added to Spotify**. There is no manual sync step. Saving a connection automatically starts delivery of already identified songs.
 
@@ -52,6 +52,6 @@ Recognition waits up to 10 seconds for Spotify delivery before notifying. A conf
 
 ## Mac app
 
-The same capture, queue and delivery code ships as a native macOS app (macOS 14+) with a Capture window and a menu-bar item (Capture song, pending count, Open, Quit). Enter the Mac's own Music Sync capture token in Settings; each device gets its own token. There is no Live Activity or Shortcut on the Mac; the app must be running to capture. Allow microphone access and notifications when prompted.
+The same capture, queue and delivery code ships as a native macOS app (macOS 14+) with a Capture window and a menu-bar item (Capture song, pending count, Open, Quit). Open the Mac's own enrollment link; each device gets its own token. There is no Live Activity or Shortcut on the Mac; the app must be running to capture. Allow microphone access and notifications when prompted.
 
 Releasing the Mac app = pushing a tag `vX.Y.Z`: `.github/workflows/release.yml` builds an unsigned Release with `just build-mac`, Developer ID-signs and notarizes it, publishes a GitHub release and bumps the `offline-shazam` cask in the Homebrew tap. Install it declaratively from the tap. `just check-mac` / `just test-mac` are the Mac CI gates; `just run-mac` makes a development-signed local build for a microphone smoke test.

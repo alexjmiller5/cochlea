@@ -100,6 +100,11 @@ struct ConnectionStore {
         }
         guard status == errSecSuccess else { throw ConfigurationError.keychain(status) }
     }
+
+    func delete() throws {
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ConfigurationError.keychain(status) }
+    }
 }
 
 // The capture endpoint authenticates before validating payloads. An empty object

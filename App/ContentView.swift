@@ -194,52 +194,32 @@ private struct CaptureRow: View {
 private struct SettingsView: View {
     let controller: CaptureController
     @Environment(\.dismiss) private var dismiss
-    @State private var endpoint = ""
-    @State private var token = ""
+    @State private var connection: DeliveryConfiguration?
     @State private var message: String?
-    @State private var savedConnection: DeliveryConfiguration?
-    @State private var isChecking = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Capture URL", text: $endpoint)
-                        .urlEntry()
-                    SecureField("Access token", text: $token)
-                        .plainEntry()
-                    HStack(spacing: 8) {
-                        Image(connectionIsSaved ? "CircleCheck" : "AlertCircle")
-                            .resizable().frame(width: 18, height: 18)
-                        Text(connectionIsSaved ? "Connection saved on this \(Runtime.deviceName)." : "Save the connection to enable Spotify delivery.")
-                            .font(.footnote)
+                    if let connection {
+                        HStack(spacing: 8) {
+                            Image("CircleCheck").resizable().frame(width: 18, height: 18)
+                            Text("Connected to \(connection.endpoint.host ?? "Music Sync")")
+                        }
+                        .foregroundStyle(Color.green)
+                        Button("Disconnect", role: .destructive) { disconnect() }
+                    } else {
+                        HStack(spacing: 8) {
+                            Image("AlertCircle").resizable().frame(width: 18, height: 18)
+                            Text("Not connected")
+                        }
+                        .foregroundStyle(Color.secondary)
                     }
-                    .foregroundStyle(connectionIsSaved ? Color.green : Color.secondary)
-                } header: { Text("Music Sync") } footer: {
-                    Text("Use the capture URL and device access token issued by Music Sync. Your connection is stored securely on this \(Runtime.deviceName).")
-                }
-                Section {
-                    Button("Save connection") {
-                        do {
-                            let configuration = try DeliveryConfiguration(endpoint: endpoint, token: token)
-                            try Runtime.connection.save(configuration)
-                            savedConnection = configuration
-                            message = "Connection saved."
-                            isChecking = true
-                            Task {
-                                do { try await controller.delivery.connectionChanged() }
-                                catch { message = "Connection saved. Your songs will retry automatically." }
-                                let verified = await controller.delivery.verifyConnection()
-                                message = verified ? "Connected to Music Sync. Waiting songs are sending automatically."
-                                    : controller.delivery.connectionIssue
-                                isChecking = false
-                                await controller.resume()
-                            }
-                        } catch { message = error.localizedDescription }
-                    }
-                    .disabled(isChecking)
-                    if isChecking { ProgressView("Checking Music Sync…").font(.footnote) }
                     if let message { Text(message).font(.footnote) }
+                } header: { Text("Music Sync") } footer: {
+                    Text(connection == nil
+                         ? "Open the enrollment link from Music Sync on this \(Runtime.deviceName) to connect. Songs are kept and sent once connected."
+                         : "This \(Runtime.deviceName)'s connection came from its enrollment link and is stored securely on it.")
                 }
                 Section("Offline captures") {
                     Text("When online, Shazam listens and identifies the song as soon as it can. Offline captures are saved for your next online use. Once identified, delivery can continue in the background.")
@@ -251,23 +231,27 @@ private struct SettingsView: View {
             .formStyle(.grouped)
             .navigationTitle("Settings").inlineTitle()
             .toolbar { ToolbarItem(placement: Platform.trailing) { Button("Done") { dismiss() } } }
-            .onAppear {
-                do {
-                    if let saved = try Runtime.connection.load() {
-                        savedConnection = saved
-                        endpoint = saved.endpoint.absoluteString
-                        token = saved.token
-                    }
-                } catch { message = error.localizedDescription }
-            }
+            .onAppear(perform: reload)
+            // An enrollment link opened while Settings is up (Runtime.enroll).
+            .onReceive(NotificationCenter.default.publisher(for: Runtime.connectionChanged)) { _ in reload() }
         }
         .sheetChrome { dismiss() }
     }
 
-    private var connectionIsSaved: Bool {
-        guard let savedConnection else { return false }
-        return endpoint.trimmingCharacters(in: .whitespacesAndNewlines) == savedConnection.endpoint.absoluteString
-            && token.trimmingCharacters(in: .whitespacesAndNewlines) == savedConnection.token
+    private func reload() {
+        do {
+            connection = try Runtime.connection.load()
+            message = connection == nil ? nil : controller.delivery.connectionIssue
+        } catch { message = error.localizedDescription }
+    }
+
+    private func disconnect() {
+        do {
+            try Runtime.connection.delete()
+            connection = nil
+            message = nil
+            Task { try? await controller.delivery.connectionChanged() }
+        } catch { message = error.localizedDescription }
     }
 }
 
@@ -300,22 +284,6 @@ private extension View {
         navigationBarTitleDisplayMode(.inline)
         #else
         self
-        #endif
-    }
-
-    @ViewBuilder func plainEntry() -> some View {
-        #if os(iOS)
-        textInputAutocapitalization(.never).autocorrectionDisabled()
-        #else
-        autocorrectionDisabled()
-        #endif
-    }
-
-    @ViewBuilder func urlEntry() -> some View {
-        #if os(iOS)
-        keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
-        #else
-        autocorrectionDisabled()
         #endif
     }
 }

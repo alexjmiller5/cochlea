@@ -10,6 +10,8 @@ import AppKit
 enum Runtime {
     static let backgroundIdentifier = (Bundle.main.bundleIdentifier ?? "offline-shazam") + ".delivery"
     static let connection = ConnectionStore()
+    /// Posted after an enrollment link saves a connection.
+    static let connectionChanged = Notification.Name("OfflineShazamConnectionChanged")
     static let notifications = CaptureNotifications()
     #if os(iOS)
     static let deviceName = "iPhone"
@@ -48,6 +50,7 @@ enum Runtime {
         guard case .success(let controller) = controller,
               let configuration = try? DeliveryConfiguration.fromEnrollLink(link),
               (try? connection.save(configuration)) != nil else { return }
+        NotificationCenter.default.post(name: connectionChanged, object: nil)
         Task {
             try? await controller.delivery.connectionChanged()
             let verified = await controller.delivery.verifyConnection()
