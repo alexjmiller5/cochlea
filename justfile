@@ -1,6 +1,6 @@
-app := "OfflineShazam"
+app := "Cochlea"
 destination := env("IOS_TEST_DESTINATION", "platform=iOS Simulator,name=iPhone 17")
-derived := env("IOS_DERIVED_DATA", env("HOME") + "/Library/Developer/Xcode/DerivedData/offline-shazam")
+derived := env("IOS_DERIVED_DATA", env("HOME") + "/Library/Developer/Xcode/DerivedData/cochlea")
 
 gen:
     "$(realpath "$(command -v xcodegen)")" generate
@@ -22,8 +22,8 @@ deploy: gen
     xcrun devicectl device install app --device "${IOS_DEVICE_ID:?Set IOS_DEVICE_ID}" "{{derived}}/Build/Products/Release-iphoneos/{{app}}.app"
 
 # --- project-specific ---
-mac := "OfflineShazamMac"
-mac_derived := env("MAC_DERIVED_DATA", env("HOME") + "/Library/Developer/Xcode/DerivedData/offline-shazam-mac")
+mac := "CochleaMac"
+mac_derived := env("MAC_DERIVED_DATA", env("HOME") + "/Library/Developer/Xcode/DerivedData/cochlea-mac")
 
 # unsigned macOS build - the CI gate for the Mac app
 check-mac: gen

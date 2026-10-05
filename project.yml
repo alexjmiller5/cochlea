@@ -1,4 +1,4 @@
-name: OfflineShazam
+name: Cochlea
 options:
   deploymentTarget:
     iOS: "17.0"
@@ -11,21 +11,21 @@ settings:
       ONLY_ACTIVE_ARCH: YES
       ENABLE_TESTABILITY: YES
 targets:
-  OfflineShazam:
+  Cochlea:
     type: application
     platform: iOS
     sources: [App, Shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER)
-        PRODUCT_NAME: OfflineShazam
+        PRODUCT_NAME: Cochlea
         PROVISIONING_PROFILE_SPECIFIER: $(IOS_APP_PROFILE)
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1"
     info:
       path: App/Info.plist
       properties:
-        CFBundleDisplayName: Offline Shazam
+        CFBundleDisplayName: Cochlea
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
         NSSupportsLiveActivities: true
@@ -33,18 +33,18 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         # offlineshazam://enroll?url=&token= from Music Sync's enrollment page
         CFBundleURLTypes:
-          - CFBundleURLName: offlineshazam
-            CFBundleURLSchemes: [offlineshazam]
+          - CFBundleURLName: cochlea
+            CFBundleURLSchemes: [cochlea, offlineshazam]
     dependencies:
-      - target: OfflineShazamActivity
-  OfflineShazamActivity:
+      - target: CochleaActivity
+  CochleaActivity:
     type: app-extension
     platform: iOS
     sources: [Widgets, Shared]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER).activity
-        PRODUCT_NAME: OfflineShazamActivity
+        PRODUCT_NAME: CochleaActivity
         PROVISIONING_PROFILE_SPECIFIER: $(IOS_ACTIVITY_PROFILE)
         CODE_SIGN_STYLE: Automatic
         TARGETED_DEVICE_FAMILY: "1"
@@ -55,7 +55,7 @@ targets:
         CFBundleDisplayName: Song Capture
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
-  OfflineShazamMac:
+  CochleaMac:
     type: application
     platform: macOS
     deploymentTarget: "14.0"
@@ -63,7 +63,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER)
-        PRODUCT_NAME: OfflineShazam
+        PRODUCT_NAME: Cochlea
         DEVELOPMENT_TEAM: 467A4PRB8F
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
@@ -73,17 +73,17 @@ targets:
       path: Mac/Info.plist
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleDisplayName: Offline Shazam
+        CFBundleDisplayName: Cochlea
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
         LSApplicationCategoryType: public.app-category.music
         CFBundleURLTypes:
-          - CFBundleURLName: offlineshazam
-            CFBundleURLSchemes: [offlineshazam]
+          - CFBundleURLName: cochlea
+            CFBundleURLSchemes: [cochlea, offlineshazam]
     entitlements:
-      path: Mac/OfflineShazam.entitlements
+      path: Mac/Cochlea.entitlements
       properties:
         com.apple.security.device.audio-input: true
-  OfflineShazamMacTests:
+  CochleaMacTests:
     type: bundle.unit-test
     platform: macOS
     deploymentTarget: "14.0"
@@ -92,11 +92,11 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER).mactests
         GENERATE_INFOPLIST_FILE: YES
-        TEST_HOST: $(BUILT_PRODUCTS_DIR)/OfflineShazam.app/Contents/MacOS/OfflineShazam
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Cochlea.app/Contents/MacOS/Cochlea
         BUNDLE_LOADER: $(TEST_HOST)
     dependencies:
-      - target: OfflineShazamMac
-  OfflineShazamTests:
+      - target: CochleaMac
+  CochleaTests:
     type: bundle.unit-test
     platform: iOS
     sources: [Tests]
@@ -105,8 +105,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER).tests
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
-      - target: OfflineShazam
-  OfflineShazamUITests:
+      - target: Cochlea
+  CochleaUITests:
     type: bundle.ui-testing
     platform: iOS
     sources: [UITests]
@@ -115,20 +115,20 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_BUNDLE_IDENTIFIER).uitests
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
-      - target: OfflineShazam
+      - target: Cochlea
 schemes:
-  OfflineShazamMac:
+  CochleaMac:
     build:
       targets:
-        OfflineShazamMac: all
-        OfflineShazamMacTests: [test]
+        CochleaMac: all
+        CochleaMacTests: [test]
     test:
-      targets: [OfflineShazamMacTests]
-  OfflineShazam:
+      targets: [CochleaMacTests]
+  Cochlea:
     build:
       targets:
-        OfflineShazam: all
-        OfflineShazamTests: [test]
-        OfflineShazamUITests: [test]
+        Cochlea: all
+        CochleaTests: [test]
+        CochleaUITests: [test]
     test:
-      targets: [OfflineShazamTests, OfflineShazamUITests]
+      targets: [CochleaTests, CochleaUITests]

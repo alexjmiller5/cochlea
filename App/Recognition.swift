@@ -27,7 +27,7 @@ extension MatchMetadata {
 }
 
 enum RecognitionDiagnostics {
-    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "offline-shazam", category: "recognition")
+    private static let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "cochlea", category: "recognition")
 
     static func log(_ error: Error) {
         let error = error as NSError

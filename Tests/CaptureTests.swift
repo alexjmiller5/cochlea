@@ -2,10 +2,50 @@ import AVFoundation
 import ShazamKit
 import SwiftData
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 @MainActor
 final class CaptureTests: XCTestCase {
+    func testRenamedApplicationKeepsQueueSignatureAndUploadPayload() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let old = root.appendingPathComponent("offline-shazam")
+        let signature = try makeSignature()
+        var id: UUID!
+        do {
+            let store = try CaptureStore(directory: old)
+            let record = try store.capture(signature: signature)
+            id = record.id
+            try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        }
+        let uploads = old.appendingPathComponent("uploads")
+        try FileManager.default.createDirectory(at: uploads, withIntermediateDirectories: true)
+        try Data("pending-upload".utf8).write(to: uploads.appendingPathComponent("payload.json"))
+        let destination = try CaptureStore.applicationDirectory(in: root)
+        XCTAssertEqual(destination.lastPathComponent, "cochlea")
+        let store = try CaptureStore(directory: destination)
+        let record = try XCTUnwrap(store.records().first)
+        XCTAssertEqual(record.id, id)
+        XCTAssertEqual(record.state, .matched)
+        XCTAssertEqual(try store.signature(for: record), signature.dataRepresentation)
+        XCTAssertEqual(try Data(contentsOf: destination.appendingPathComponent("uploads/payload.json")), Data("pending-upload".utf8))
+        XCTAssertEqual(try CaptureStore.applicationDirectory(in: root), destination)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+    }
+
+    func testRenameNeverOverwritesAnExistingDestination() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for name in ["offline-shazam", "cochlea"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+            try Data(name.utf8).write(to: root.appendingPathComponent(name + "/marker"))
+        }
+        XCTAssertThrowsError(try CaptureStore.applicationDirectory(in: root))
+        for name in ["offline-shazam", "cochlea"] {
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(name + "/marker")), Data(name.utf8))
+        }
+    }
+
     func testExistingQueueMigratesWithoutLosingMatchedSongOrRetryDeadline() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

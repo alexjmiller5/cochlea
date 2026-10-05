@@ -48,6 +48,18 @@ final class CaptureStore {
     let context: ModelContext
     let signatureDirectory: URL
 
+    static func applicationDirectory(in root: URL) throws -> URL {
+        let destination = root.appendingPathComponent("cochlea", isDirectory: true)
+        let previous = root.appendingPathComponent("offline-shazam", isDirectory: true)
+        let files = FileManager.default
+        if files.fileExists(atPath: previous.path) {
+            // An atomic move preserves the queue, SQLite sidecars, signatures and uploads.
+            // Refuse a collision instead of silently hiding or overwriting either queue.
+            try files.moveItem(at: previous, to: destination)
+        }
+        return destination
+    }
+
     init(directory: URL) throws {
         signatureDirectory = directory.appendingPathComponent("signatures", isDirectory: true)
         try FileManager.default.createDirectory(at: signatureDirectory, withIntermediateDirectories: true)

@@ -14,4 +14,4 @@ TAP_PUSH_TOKEN=op://Apple Signing/Homebrew Tap Push Token/token
 # Project vault - the Mac client's own device credential, minted by Music Sync's
 # capture-access endpoint and entered in the app's Settings (Keychain). Not read
 # by CI; listed so op-project-bootstrap can derive the project vault.
-OFFLINE_SHAZAM_MAC_CAPTURE_TOKEN=op://Offline Shazam/Offline Shazam Music Sync Mac Capture Token/credential
+COCHLEA_MAC_CAPTURE_TOKEN=op://Cochlea/Cochlea Music Sync Mac Capture Token/credential

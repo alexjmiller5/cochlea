@@ -1,7 +1,7 @@
 import AVFoundation
 import ShazamKit
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 @MainActor
 final class ControllerTests: XCTestCase {

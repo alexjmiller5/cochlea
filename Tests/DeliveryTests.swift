@@ -1,7 +1,7 @@
 import Foundation
 import ShazamKit
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 @MainActor
 final class DeliveryTests: XCTestCase {

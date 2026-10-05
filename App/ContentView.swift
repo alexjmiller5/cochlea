@@ -101,7 +101,7 @@ struct ContentView: View {
                 .padding(.horizontal, 24).padding(.bottom, 32)
             }
             .background(Platform.groupedBackground)
-            .navigationTitle("Offline Shazam")
+            .navigationTitle("Cochlea")
             .inlineTitle()
             .toolbar {
                 ToolbarItem(placement: Platform.trailing) {
@@ -303,7 +303,7 @@ struct MenuBarView: View {
         let pending = controller.records.filter { $0.state == .pending || $0.state == .matched }.count
         if pending > 0 { Text("\(pending) pending") }
         Divider()
-        Button("Open Offline Shazam") {
+        Button("Open Cochlea") {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "main")
         }

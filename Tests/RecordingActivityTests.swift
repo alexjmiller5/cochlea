@@ -2,7 +2,7 @@
 import ActivityKit
 import ShazamKit
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 @MainActor
 final class RecordingActivityTests: XCTestCase {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 final class EnrollLinkTests: XCTestCase {
     func testEnrollLinkCarriesTheCaptureURLAndToken() throws {
@@ -7,6 +7,13 @@ final class EnrollLinkTests: XCTestCase {
         let configuration = try XCTUnwrap(try DeliveryConfiguration.fromEnrollLink(link))
         XCTAssertEqual(configuration.endpoint.absoluteString, "https://ws--capture-consumer.modal.run")
         XCTAssertEqual(configuration.token, "abc_DEF-123")
+    }
+
+    func testCochleaEnrollmentLinkUsesTheSameConsumerContract() throws {
+        let link = URL(string: "cochlea://enroll?url=https%3A%2F%2Fexample.com%2Fcapture&token=example-token")!
+        let configuration = try XCTUnwrap(try DeliveryConfiguration.fromEnrollLink(link))
+        XCTAssertEqual(configuration.endpoint.absoluteString, "https://example.com/capture")
+        XCTAssertEqual(configuration.token, "example-token")
     }
 
     func testOtherLinksAreNotEnrollment() throws {
@@ -24,7 +31,7 @@ final class EnrollLinkTests: XCTestCase {
 
 final class ConnectionStoreTests: XCTestCase {
     func testDeleteForgetsTheSavedConnection() throws {
-        let store = ConnectionStore(service: "offline-shazam.tests.\(UUID().uuidString)")
+        let store = ConnectionStore(service: "cochlea.tests.\(UUID().uuidString)")
         try store.save(DeliveryConfiguration(endpoint: "https://ws--capture-consumer.modal.run", token: "tok"))
         XCTAssertEqual(try store.load()?.token, "tok")
         try store.delete()

@@ -159,13 +159,13 @@ final class AudioRecorder {
 
     #if os(iOS)
     static let interruptionNotification = AVAudioSession.interruptionNotification
-    static func isInterruptionBegan(_ notification: Notification) -> Bool {
+    nonisolated static func isInterruptionBegan(_ notification: Notification) -> Bool {
         (notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt) == AVAudioSession.InterruptionType.began.rawValue
     }
     #else
     // macOS has no audio session; engine configuration changes are the equivalent interruption.
     static let interruptionNotification = Notification.Name.AVAudioEngineConfigurationChange
-    static func isInterruptionBegan(_ notification: Notification) -> Bool { true }
+    nonisolated static func isInterruptionBegan(_ notification: Notification) -> Bool { true }
     #endif
 
     private func finish(id: UUID, stream: StreamingAudio, error: Error? = nil) {

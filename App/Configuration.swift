@@ -30,12 +30,12 @@ struct DeliveryConfiguration: Codable {
 }
 
 extension DeliveryConfiguration {
-    static let enrollScheme = "offlineshazam"
+    static let enrollScheme = "cochlea"
 
     /// `offlineshazam://enroll?url=<capture URL>&token=<token>`, opened from Music
     /// Sync's enrollment page. nil for any other link; throws on unusable values.
     static func fromEnrollLink(_ link: URL) throws -> DeliveryConfiguration? {
-        guard link.scheme?.lowercased() == enrollScheme, link.host?.lowercased() == "enroll" else { return nil }
+        guard [enrollScheme, "offlineshazam"].contains(link.scheme?.lowercased() ?? ""), link.host?.lowercased() == "enroll" else { return nil }
         let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
         let value = { (name: String) in items.first { $0.name == name }?.value ?? "" }
         return try DeliveryConfiguration(endpoint: value("url"), token: value("token"))
@@ -70,7 +70,7 @@ struct CapturePayload {
 }
 
 struct ConnectionStore {
-    var service = (Bundle.main.bundleIdentifier ?? "offline-shazam") + ".connection"
+    var service = (Bundle.main.bundleIdentifier ?? "cochlea") + ".connection"
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: service, kSecAttrAccount as String: "capture"]

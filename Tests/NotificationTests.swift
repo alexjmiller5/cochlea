@@ -2,7 +2,7 @@
 import SwiftData
 import UserNotifications
 import XCTest
-@testable import OfflineShazam
+@testable import Cochlea
 
 @MainActor
 final class NotificationTests: XCTestCase {

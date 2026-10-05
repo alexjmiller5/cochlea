@@ -3,7 +3,7 @@
 App/Info.plist
 Widgets/Info.plist
 Mac/Info.plist
-Mac/OfflineShazam.entitlements
+Mac/Cochlea.entitlements
 
 .DS_Store
 xcuserdata/

@@ -8,20 +8,20 @@ import AppKit
 
 @MainActor
 enum Runtime {
-    static let backgroundIdentifier = (Bundle.main.bundleIdentifier ?? "offline-shazam") + ".delivery"
+    static let backgroundIdentifier = (Bundle.main.bundleIdentifier ?? "cochlea") + ".delivery"
     static let connection = ConnectionStore()
     /// Posted after an enrollment link saves a connection.
-    static let connectionChanged = Notification.Name("OfflineShazamConnectionChanged")
+    static let connectionChanged = Notification.Name("CochleaConnectionChanged")
     static let notifications = CaptureNotifications()
     #if os(iOS)
-    static let deviceName = "iPhone"
+    nonisolated static let deviceName = "iPhone"
     #else
-    static let deviceName = "Mac"
+    nonisolated static let deviceName = "Mac"
     #endif
     static let controller: Result<CaptureController, Error> = Result {
-        let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                    appropriateFor: nil, create: true)
-            .appendingPathComponent("offline-shazam", isDirectory: true)
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                               appropriateFor: nil, create: true)
+        let directory = try CaptureStore.applicationDirectory(in: root)
         let store = try CaptureStore(directory: directory)
         let configuration = URLSessionConfiguration.background(withIdentifier: backgroundIdentifier)
         configuration.sessionSendsLaunchEvents = true
@@ -75,7 +75,7 @@ enum Runtime {
                 if reconnected { await controller.resume() }
             }
         }
-        monitor.start(queue: DispatchQueue(label: "offline-shazam.connectivity"))
+        monitor.start(queue: DispatchQueue(label: "cochlea.connectivity"))
     }
 }
 

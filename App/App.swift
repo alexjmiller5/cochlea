@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct OfflineShazamApp: App {
+struct CochleaApp: App {
     #if os(iOS)
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     #else
@@ -13,7 +13,7 @@ struct OfflineShazamApp: App {
         mainWindow
         #else
         mainWindow.defaultSize(width: 440, height: 720)
-        MenuBarExtra("Offline Shazam", systemImage: "waveform") {
+        MenuBarExtra("Cochlea", systemImage: "waveform") {
             if case .success(let controller) = Runtime.controller { MenuBarView(controller: controller) }
             else { Text("Captures unavailable") }
         }

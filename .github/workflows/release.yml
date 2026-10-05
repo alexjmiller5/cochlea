@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  APP: OfflineShazam
+  APP: Cochlea
   KEYCHAIN: release.keychain-db
 
 jobs:
@@ -83,7 +83,7 @@ jobs:
           # The unsigned build carries no entitlements; the microphone one must
           # be applied here or ShazamKit never hears anything.
           codesign --force --options runtime --timestamp \
-            --entitlements "Mac/OfflineShazam.entitlements" \
+            --entitlements "Mac/Cochlea.entitlements" \
             --sign "$IDENTITY" "build/$APP.app"
           codesign --verify --deep --strict --verbose=2 "build/$APP.app"
           codesign -d --entitlements - "build/$APP.app" 2>/dev/null \
@@ -116,8 +116,8 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           SHA256=$(shasum -a 256 "build/$APP-$GITHUB_REF_NAME.zip" | awk '{print $1}')
           git clone "https://x-access-token:${TAP_PUSH_TOKEN}@github.com/alexjmiller5/homebrew-tap.git" tap
-          cat > "tap/Casks/offline-shazam.rb" <<EOF
-          cask "offline-shazam" do
+          cat > "tap/Casks/cochlea.rb" <<EOF
+          cask "cochlea" do
             version "$VERSION"
             sha256 "$SHA256"
 
@@ -132,7 +132,10 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "Casks/offline-shazam.rb"
+          # Homebrew follows this mapping when users upgrade an existing installation.
+          python3 -c 'import json,pathlib; p=pathlib.Path("cask_renames.json"); d=json.loads(p.read_text()) if p.exists() else {}; d["offline-shazam"]="cochlea"; p.write_text(json.dumps(d, indent=2)+"\n")'
+          git rm --ignore-unmatch "Casks/offline-shazam.rb"
+          git add "Casks/cochlea.rb" "cask_renames.json"
           git commit -m "$APP $VERSION"
           git push
 
