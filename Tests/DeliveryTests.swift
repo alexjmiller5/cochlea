@@ -29,8 +29,13 @@ final class DeliveryTests: XCTestCase {
                 return (422, [:], accepted)
             }
             uploads += 1
-            // Upload order follows capture creation order.
-            let id = uploads == 1 ? fixture.record.id : newer.id
+            // Concurrent URLSession uploads can arrive in either order.
+            let payload = try? JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            guard let id = payload?["capture_id"] as? String else {
+                XCTFail("Upload must contain its capture ID")
+                return (400, [:], Data())
+            }
+            XCTAssertTrue([fixture.record.id, newer.id].contains(UUID(uuidString: id)))
             return (200, [:], Data("{\"ok\":true,\"capture_id\":\"\(id)\",\"isrc\":\"XX0000000001\"}".utf8))
         }
         let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
