@@ -21,6 +21,11 @@ deploy: gen
     xcodebuild -quiet -project {{app}}.xcodeproj -scheme {{app}} -derivedDataPath "{{derived}}" -destination "generic/platform=iOS" -configuration Release DEVELOPMENT_TEAM="${IOS_TEAM_ID:?Set IOS_TEAM_ID}" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="Apple Distribution" IOS_APP_PROFILE="${IOS_PROFILE:?Set IOS_PROFILE}" IOS_ACTIVITY_PROFILE="${IOS_ACTIVITY_PROFILE:?Set IOS_ACTIVITY_PROFILE}" build
     xcrun devicectl device install app --device "${IOS_DEVICE_ID:?Set IOS_DEVICE_ID}" "{{derived}}/Build/Products/Release-iphoneos/{{app}}.app"
 
+# Serve a decrypted IPA after verifying both bundles for IOS_TEAM_ID / IOS_DEVICE_ID.
+ota ipa="build/Cochlea.ipa":
+    python3 scripts/sign-ios.py --verify-ipa "{{ipa}}"
+    bash scripts/ota-install.sh "{{ipa}}"
+
 # --- project-specific ---
 mac := "CochleaMac"
 mac_derived := env("MAC_DERIVED_DATA", env("HOME") + "/Library/Developer/Xcode/DerivedData/cochlea-mac")

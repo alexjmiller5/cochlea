@@ -5,6 +5,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.3.0"
+    CURRENT_PROJECT_VERSION: 1
     APP_BUNDLE_IDENTIFIER: com.alexmiller.offline-shazam
   configs:
     debug:
@@ -25,6 +27,8 @@ targets:
     info:
       path: App/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Cochlea
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
@@ -52,6 +56,8 @@ targets:
     info:
       path: Widgets/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDisplayName: Song Capture
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
@@ -67,8 +73,6 @@ targets:
         DEVELOPMENT_TEAM: 467A4PRB8F
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
-        MARKETING_VERSION: "0.2.1"
-        CURRENT_PROJECT_VERSION: 1
     info:
       path: Mac/Info.plist
       properties:

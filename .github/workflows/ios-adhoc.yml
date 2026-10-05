@@ -1,0 +1,66 @@
+name: Build iOS Ad Hoc
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_recipient:
+        description: Ephemeral public age recipient (keep the private identity locally)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: ios-adhoc-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  signed-ipa:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      ARTIFACT_RECIPIENT: ${{ inputs.artifact_recipient }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare tools and validate inputs
+        run: |
+          brew install xcodegen age
+          python3 - <<'PY'
+          import os, re
+          if not re.fullmatch(r'age1[0-9a-z]{58}', os.environ['ARTIFACT_RECIPIENT']):
+              raise SystemExit('Expected one native age public recipient')
+          PY
+          printf '' | age --encrypt --recipient "$ARTIFACT_RECIPIENT" --output "$RUNNER_TEMP/recipient-check.age"
+          python3 -m unittest discover -s scripts -p '*_test.py'
+      - name: Load signing material
+        uses: 1password/load-secrets-action@v2
+        with:
+          export-env: true
+        env:
+          OP_SERVICE_ACCOUNT_TOKEN: ${{ secrets.OP_SERVICE_ACCOUNT_TOKEN }}
+          IOS_CERTIFICATE_P12_BASE64: op://Apple Signing/Apple Distribution Cert/p12_base64
+          IOS_CERTIFICATE_PASSWORD: op://Apple Signing/Apple Distribution Cert/password
+          IOS_PROFILE_BASE64: op://Apple Signing/Cochlea CI Apple Ad Hoc Profile/mobileprovision_base64
+          IOS_ACTIVITY_PROFILE_BASE64: op://Apple Signing/Wildcard Ad Hoc Profile/mobileprovision_base64
+      - name: Archive and verify app and extension
+        run: |
+          "$(realpath "$(command -v xcodegen)")" generate --spec project.yml
+          python3 scripts/sign-ios.py --project Cochlea.xcodeproj --scheme Cochlea --output "$RUNNER_TEMP/ios-output"
+      - name: Encrypt IPA
+        run: |
+          age --encrypt --recipient "$ARTIFACT_RECIPIENT" --output "$RUNNER_TEMP/ios-output/Cochlea.ipa.age" "$RUNNER_TEMP/ios-output/Cochlea.ipa"
+      - uses: actions/upload-artifact@v7.0.1
+        with:
+          name: ios-ad-hoc-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ios-output/Cochlea.ipa.age
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+      - name: Remove plaintext IPA
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          (Path(os.environ['RUNNER_TEMP']) / 'ios-output/Cochlea.ipa').unlink(missing_ok=True)
+          PY

@@ -1,43 +1,6 @@
 import AppIntents
 import UniformTypeIdentifiers
 
-#if os(iOS)
-typealias CaptureSongIntentKind = LiveActivityIntent & ForegroundContinuableIntent
-#else
-typealias CaptureSongIntentKind = AppIntent
-#endif
-
-struct CaptureSongIntent: CaptureSongIntentKind {
-    static var title: LocalizedStringResource = "Capture song"
-    static var description = IntentDescription("Identify music as you listen, or save an offline capture for automatic identification on your next online use.")
-    static var openAppWhenRun = false
-
-    @MainActor
-    func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        var requiresLiveActivity = false
-        #if os(iOS)
-        if #available(iOS 18, *) { requiresLiveActivity = true }
-        else { try await requestToContinueInForeground() }
-        #endif
-        let controller = try Runtime.controller.get()
-        let record: CaptureRecord
-        do {
-            record = try await controller.capture(requiresLiveActivity: requiresLiveActivity)
-        } catch is CancellationError {
-            return .result(value: "Capture canceled")
-        }
-        // Keep the run alive until the Dynamic Island has shown the result.
-        await controller.recordingActivity?.waitUntilDismissed()
-        if let title = record.title, let artist = record.artist { return .result(value: "\(title) by \(artist)") }
-        return .result(value: "Capture saved")
-    }
-}
-
-#if os(iOS)
-@available(iOS 18, *)
-extension CaptureSongIntent: AudioRecordingIntent {}
-#endif
-
 struct ImportAudioIntent: AppIntent {
     static var title: LocalizedStringResource = "Save audio capture"
     static var description = IntentDescription("Save a recorded audio clip and automatically identify pending captures when online. Accepts clips up to 30 seconds.")

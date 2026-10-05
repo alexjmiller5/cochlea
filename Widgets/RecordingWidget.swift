@@ -2,7 +2,6 @@ import ActivityKit
 import SwiftUI
 import WidgetKit
 
-@main
 struct RecordingWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: RecordingAttributes.self) { context in
