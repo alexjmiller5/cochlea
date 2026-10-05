@@ -67,11 +67,12 @@ targets:
         DEVELOPMENT_TEAM: 467A4PRB8F
         CODE_SIGN_STYLE: Automatic
         ENABLE_HARDENED_RUNTIME: YES
-        MARKETING_VERSION: "0.2.0"
+        MARKETING_VERSION: "0.2.1"
         CURRENT_PROJECT_VERSION: 1
     info:
       path: Mac/Info.plist
       properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleDisplayName: Offline Shazam
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
         LSApplicationCategoryType: public.app-category.music

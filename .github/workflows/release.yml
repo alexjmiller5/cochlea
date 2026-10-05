@@ -49,6 +49,11 @@ jobs:
       - name: Build (unsigned Release)
         run: just build-mac
 
+      - name: Verify release version
+        run: |
+          ACTUAL=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "build/$APP.app/Contents/Info.plist")
+          test "$ACTUAL" = "${GITHUB_REF_NAME#v}"
+
       - name: Import Developer ID cert into temp keychain
         run: |
           KEYCHAIN_PASSWORD=$(uuidgen)
