@@ -383,8 +383,9 @@ final class DeliveryTests: XCTestCase {
             dates.append(Date())
             let outcome = bodies.count == 1 ? "not_added" : bodies.count == 2 ? "unknown" : "added"
             let ok = bodies.count >= 4
+            let detail = ok ? "\"isrc\":\"XX0000000001\"" : "\"message\":\"capture unavailable\""
             return (ok ? 200 : 503, ["Retry-After": "0.15"],
-                Data("{\"ok\":\(ok),\"capture_id\":\"\(id)\",\"isrc\":\"XX0000000001\",\"spotify_outcome\":\"\(outcome)\"}".utf8))
+                Data("{\"ok\":\(ok),\"capture_id\":\"\(id)\",\(detail),\"spotify_outcome\":\"\(outcome)\"}".utf8))
         }
         try await fixture.service.enqueue()
         await fulfillment(of: [confirmed], timeout: 10)

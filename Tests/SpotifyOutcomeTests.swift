@@ -170,8 +170,11 @@ final class SpotifyOutcomeTests: XCTestCase {
     }
 
     private func finish(_ store: CaptureStore, _ record: CaptureRecord, outcome: String, status: Int = 503, ok: Bool = false) throws {
-        let data = try JSONSerialization.data(withJSONObject: ["ok": ok, "capture_id": record.id.uuidString.lowercased(),
-            "spotify_outcome": outcome, "isrc": "XX0000000001"])
+        var receipt: [String: Any] = ["ok": ok, "capture_id": record.id.uuidString.lowercased(),
+            "spotify_outcome": outcome]
+        if ok { receipt["isrc"] = "XX0000000001" }
+        else { receipt["message"] = "capture unavailable" }
+        let data = try JSONSerialization.data(withJSONObject: receipt)
         try store.deliveryFinished(record, status: status, data: data)
     }
 }
