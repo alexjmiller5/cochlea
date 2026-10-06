@@ -7,6 +7,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
     let connection: () throws -> DeliveryConfiguration?
     let sessionConfiguration: URLSessionConfiguration
     let retryDelay: TimeInterval
+    private let existingTasks: (() async -> [URLSessionTask])?
     var onChange: (() -> Void)?
     var onRecordsChanged: (() async -> Void)?
     var backgroundCompletion: (() -> Void)?
@@ -27,12 +28,14 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
     lazy var session = URLSession(configuration: sessionConfiguration, delegate: self, delegateQueue: .main)
 
     init(store: CaptureStore, uploadDirectory: URL, connection: @escaping () throws -> DeliveryConfiguration?,
-         sessionConfiguration: URLSessionConfiguration, retryDelay: TimeInterval = 30) {
+         sessionConfiguration: URLSessionConfiguration, retryDelay: TimeInterval = 30,
+         existingTasks: (() async -> [URLSessionTask])? = nil) {
         self.store = store
         self.uploadDirectory = uploadDirectory
         self.connection = connection
         self.sessionConfiguration = sessionConfiguration
         self.retryDelay = max(0.01, retryDelay)
+        self.existingTasks = existingTasks
         super.init()
         do {
             currentConfiguration = try connection()
@@ -60,14 +63,20 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
         do {
             let tasks = await currentTasks()
             guard !invalidated, !changingConnection else { return }
-            uploadingIDs = Set(tasks.filter { $0.state != .completed && !supersededTaskIDs.contains($0.taskIdentifier) }
-                .compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
             let configuration = try connection()
             currentConfiguration = configuration
             guard let configuration else {
                 connectionIssue = "Connect Music Sync in Settings to add songs to Spotify."
                 return
             }
+            // URLSession may omit a finished transfer before its completion
+            // callback persists the receipt. Keep our IDs until that callback;
+            // adopt restored tasks only for the active connection.
+            uploadingIDs.formUnion(tasks.filter {
+                $0.state != .completed && !supersededTaskIDs.contains($0.taskIdentifier) &&
+                $0.originalRequest?.url == configuration.endpoint &&
+                $0.originalRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer " + configuration.token
+            }.compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
             let records = try store.records().filter { $0.state == .matched }
             guard !records.contains(where: \.deliveryBlocked) else {
                 connectionIssue = ConnectionCheckError.rejected.localizedDescription
@@ -176,7 +185,8 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
     }
 
     private func currentTasks() async -> [URLSessionTask] {
-        await withCheckedContinuation { continuation in
+        if let existingTasks { return await existingTasks() }
+        return await withCheckedContinuation { continuation in
             session.getAllTasks { continuation.resume(returning: $0) }
         }
     }

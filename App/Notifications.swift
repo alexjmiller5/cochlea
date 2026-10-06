@@ -5,14 +5,20 @@ final class CaptureNotifications {
     private let center: UNUserNotificationCenter
     private let authorization: () async -> UNAuthorizationStatus
     private let schedule: (UNNotificationRequest) async throws -> Void
+    private let existingRequests: () async -> (pending: [UNNotificationRequest], delivered: [UNNotificationRequest])
     private var reconciliation: Task<Void, Never>?
 
     init(center: UNUserNotificationCenter = .current(),
          authorization: (() async -> UNAuthorizationStatus)? = nil,
-         schedule: ((UNNotificationRequest) async throws -> Void)? = nil) {
+         schedule: ((UNNotificationRequest) async throws -> Void)? = nil,
+         existingRequests: (() async -> (pending: [UNNotificationRequest], delivered: [UNNotificationRequest]))? = nil) {
         self.center = center
         self.authorization = authorization ?? { await center.notificationSettings().authorizationStatus }
         self.schedule = schedule ?? { try await center.add($0) }
+        self.existingRequests = existingRequests ?? {
+            let pending = await center.pendingNotificationRequests()
+            return (pending, await center.deliveredNotifications().map(\.request))
+        }
     }
 
     func requestAuthorization() async -> Bool {
@@ -34,16 +40,26 @@ final class CaptureNotifications {
         case .authorized, .provisional, .ephemeral: break
         default: return
         }
-        let pending = await center.pendingNotificationRequests()
-        let delivered = await center.deliveredNotifications().map(\.request)
+        let (pending, delivered) = await existingRequests()
         guard let records = try? store.records() else { return }
         for record in records where record.state == .matched || record.state == .delivered {
             let identifier = "capture." + record.id.uuidString
-            let existing = (pending + delivered).filter { $0.identifier == identifier }
-            guard !record.deliveryNotificationScheduled,
-                  record.state == .matched || record.notificationEligible || !existing.isEmpty,
+            let legacyPending = pending.contains {
+                $0.identifier == identifier && $0.content.userInfo["stage"] as? String == "delivered"
+            }
+            let existing = (pending.filter { $0.content.userInfo["stage"] as? String != "delivered" } + delivered)
+                .filter { $0.identifier == identifier }
+            guard record.state == .matched || record.notificationEligible || !existing.isEmpty || legacyPending,
                   let metadata = record.metadata else { continue }
             do {
+                // The old combined card may have replaced recognition before either
+                // fired. Replace that first alert, but never replay earlier recognition
+                // merely because the user dismissed it from Notification Center.
+                if legacyPending, !delivered.contains(where: { $0.identifier == identifier }),
+                   record.recognitionNotificationDate.map({ $0 > Date() }) ?? true {
+                    record.deliveryNotificationScheduled = false
+                    record.recognitionNotificationDate = nil
+                }
                 // Recover an OS-accepted request if the process stopped before SwiftData saved it.
                 for request in existing {
                     if request.content.userInfo["stage"] as? String == "delivered" {
@@ -54,28 +70,24 @@ final class CaptureNotifications {
                     }
                 }
                 if store.context.hasChanges { try store.save() }
+                // Persist any first-alert recovery before canceling the legacy request,
+                // so a scheduling failure or relaunch can still retry recognition.
+                if legacyPending { center.removePendingNotificationRequests(withIdentifiers: [identifier]) }
                 guard !record.deliveryNotificationScheduled else { continue }
-                let isDelivered = record.state == .delivered
-                guard isDelivered || record.recognitionNotificationDate == nil else { continue }
-                let recognitionDate = Date().addingTimeInterval(10)
+                guard record.recognitionNotificationDate == nil else { continue }
+                let recognitionDate = Date().addingTimeInterval(1)
                 let content = UNMutableNotificationContent()
-                content.title = isDelivered ? "Added to Spotify" : "Song recognized"
+                content.title = "Song recognized"
                 content.body = metadata.title + " by " + metadata.artist
-                if !isDelivered { content.body += ". Saved for delivery." }
-                // Same identifier per capture: a delayed confirmation replaces the
-                // recognition card and alerts again, so one song never shows two cards.
                 content.sound = .default
                 content.interruptionLevel = .active
                 content.userInfo = ["captureID": record.id.uuidString,
-                                    "stage": isDelivered ? "delivered" : "recognized"]
-                if !isDelivered { content.userInfo["recognitionDate"] = recognitionDate.timeIntervalSince1970 }
-                // A nil trigger delivers immediately but can leave an older timed request pending.
-                // A timed replacement cancels that request and also updates a delivered card by ID.
-                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: isDelivered ? 1 : 10, repeats: false)
+                                    "stage": "recognized",
+                                    "recognitionDate": recognitionDate.timeIntervalSince1970]
+                let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false)
                 try await schedule(UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
                 record.notificationEligible = true
-                if isDelivered { record.deliveryNotificationScheduled = true }
-                else { record.recognitionNotificationDate = recognitionDate }
+                record.recognitionNotificationDate = recognitionDate
                 try store.save()
             } catch {
                 // Notification failure is optional; the next reconciliation retries without changing the song queue.

@@ -35,13 +35,17 @@ final class NotificationTests: XCTestCase {
         try await super.tearDown()
     }
 
-    func testRecognitionSchedulesNativeGracePeriodWithoutClaimingSpotifySuccess() async throws {
+    func testRecognitionSchedulesPromptNativeNotificationWithoutClaimingSpotifySuccess() async throws {
         let store = try CaptureStore(directory: directory)
         let record = try matched(in: store)
-        await CaptureNotifications().reconcile(store: store)
-        let pendingRequest = await pending(record)
-        let request = try XCTUnwrap(pendingRequest)
-        XCTAssertEqual((request.trigger as? UNTimeIntervalNotificationTrigger)?.timeInterval, 10)
+        var scheduled: UNNotificationRequest?
+        await CaptureNotifications(schedule: { request in
+            scheduled = request
+            try await self.center.add(request)
+        }).reconcile(store: store)
+        let request = try XCTUnwrap(scheduled)
+        _ = try await delivered(record)
+        XCTAssertEqual((request.trigger as? UNTimeIntervalNotificationTrigger)?.timeInterval, 1)
         XCTAssertFalse(request.trigger?.repeats ?? true)
         XCTAssertTrue(request.content.body.contains("Example Song"))
         XCTAssertTrue(request.content.body.contains("Example Artist"))
@@ -49,40 +53,40 @@ final class NotificationTests: XCTestCase {
         XCTAssertNotNil(request.content.sound)
     }
 
-    func testDeliveryWithinGraceReplacesPendingRecognitionWithOneCombinedNativeNotification() async throws {
+    func testQuickDeliveryLeavesOneRecognitionNotification() async throws {
         let store = try CaptureStore(directory: directory)
         let record = try matched(in: store)
         let notifications = CaptureNotifications()
         await notifications.reconcile(store: store)
-        let pendingRequest = await pending(record)
-        XCTAssertNotNil(pendingRequest)
         try deliver(record, store: store)
         await notifications.reconcile(store: store)
         let request = try await delivered(record)
         let pendingRequestAfterDelivery = await pending(record)
-        XCTAssertNil(pendingRequestAfterDelivery, "Confirmed delivery replaces the scheduled recognition")
-        XCTAssertTrue(request.content.title.contains("Spotify"))
+        XCTAssertNil(pendingRequestAfterDelivery, "Recognition delivers without a separate success request")
+        XCTAssertEqual(request.content.title, "Song recognized")
         XCTAssertTrue(request.content.body.contains("Example Song"))
-        XCTAssertNotNil(request.content.sound, "A combined result is the first alert")
+        XCTAssertNotNil(request.content.sound, "Recognition is the only success alert")
         let cards = await center.deliveredNotifications().filter { $0.request.identifier == request.identifier }
         XCTAssertEqual(cards.count, 1)
     }
 
-    func testDelayedDeliveryAlertsAgainOnTheSameNativeCard() async throws {
+    func testDelayedDeliveryDoesNotAlertAgainOrReplaceTheRecognitionCard() async throws {
         let store = try CaptureStore(directory: directory)
         let record = try matched(in: store)
-        let notifications = CaptureNotifications()
+        var schedules = 0
+        let notifications = CaptureNotifications(schedule: { request in
+            schedules += 1
+            try await self.center.add(request)
+        })
         await notifications.reconcile(store: store)
-        let recognition = try await delivered(record, timeout: 14)
-        XCTAssertFalse(recognition.content.title.contains("Spotify"))
+        let recognition = try await delivered(record)
+        XCTAssertEqual(recognition.content.title, "Song recognized")
         try deliver(record, store: store)
         await notifications.reconcile(store: store)
-        let final = try await delivered(record, containing: "Spotify")
+        let final = try await delivered(record)
         XCTAssertEqual(final.identifier, recognition.identifier)
-        XCTAssertNotNil(final.content.sound, "A delayed Spotify confirmation alerts again")
-        XCTAssertEqual(final.content.interruptionLevel, .active)
-        let cards = await center.deliveredNotifications().filter { $0.request.identifier == final.identifier }
-        XCTAssertEqual(cards.count, 1, "Updating a delivered capture must leave only one native card")
+        XCTAssertEqual(final.content.title, "Song recognized")
+        XCTAssertEqual(schedules, 1, "A delayed Spotify success must remain silent")
     }
 
     func testRelaunchAndDeliveryRetriesDoNotRescheduleOrRepeatDismissedNotifications() async throws {
@@ -91,25 +95,25 @@ final class NotificationTests: XCTestCase {
             let store = try CaptureStore(directory: directory)
             let record = try matched(in: store)
             id = record.id
-            let notifications = CaptureNotifications()
+            var schedules = 0
+            let notifications = CaptureNotifications(schedule: { request in
+                schedules += 1
+                try await self.center.add(request)
+            })
             await notifications.reconcile(store: store)
-            let pendingRequest = await pending(record)
-            let first = try XCTUnwrap(pendingRequest)
-            let deadline = try XCTUnwrap((first.trigger as? UNTimeIntervalNotificationTrigger)?.nextTriggerDate())
+            _ = try await delivered(record)
             for _ in 0..<2 {
                 try store.deliveryFinished(record, status: 503, data: Data())
                 await notifications.reconcile(store: store)
             }
-            let pendingRequestAfterRetries = await pending(record)
-            let afterRetries = try XCTUnwrap(pendingRequestAfterRetries)
-            XCTAssertEqual(try XCTUnwrap((afterRetries.trigger as? UNTimeIntervalNotificationTrigger)?.nextTriggerDate()).timeIntervalSince(deadline), 0, accuracy: 0.1)
+            XCTAssertEqual(schedules, 1, "Retries must not replace recognition or alert again")
         }
         do {
             let store = try CaptureStore(directory: directory)
             let record = try XCTUnwrap(store.records().first(where: { $0.id == id }))
             try deliver(record, store: store)
             await CaptureNotifications().reconcile(store: store)
-            _ = try await delivered(record, containing: "Spotify")
+            _ = try await delivered(record, containing: "Song recognized")
             center.removeDeliveredNotifications(withIdentifiers: [identifier(record)])
         }
         let reopened = try CaptureStore(directory: directory)
@@ -128,15 +132,19 @@ final class NotificationTests: XCTestCase {
     func testUnvalidatedReceiptsNeverScheduleSpotifySuccess() async throws {
         let store = try CaptureStore(directory: directory)
         let record = try matched(in: store)
-        let notifications = CaptureNotifications()
+        var requests: [UNNotificationRequest] = []
+        let notifications = CaptureNotifications(schedule: { request in
+            requests.append(request)
+            try await self.center.add(request)
+        })
         for body in ["{\"ok\":true}", "{\"ok\":true,\"capture_id\":\"\(UUID())\",\"isrc\":\"XX0000000001\"}", "not json"] {
             try store.deliveryFinished(record, status: 200, data: Data(body.utf8))
             await notifications.reconcile(store: store)
             XCTAssertEqual(record.state, .matched)
-            let pendingRequest = await pending(record)
-            let request = try XCTUnwrap(pendingRequest)
-            XCTAssertFalse(request.content.title.contains("Spotify"))
         }
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.content.title, "Song recognized")
+        _ = try await delivered(record)
     }
 
     func testDeniedAuthorizationLeavesTheCaptureQueueUsable() async throws {
@@ -168,8 +176,7 @@ final class NotificationTests: XCTestCase {
         let reopened = try CaptureStore(directory: directory)
         let record = try XCTUnwrap(reopened.records().first)
         await CaptureNotifications().reconcile(store: reopened)
-        let pendingRequest = await pending(record)
-        XCTAssertNotNil(pendingRequest, "A failed scheduling attempt must not persist completed progress")
+        _ = try await delivered(record)
     }
 
     func testExistingDeliveredHistoryDoesNotGenerateUpgradeAlerts() async throws {
@@ -185,7 +192,7 @@ final class NotificationTests: XCTestCase {
         XCTAssertEqual(schedules, 0, "Previously completed history must remain quiet after upgrade")
     }
 
-    func testReceiptArrivingDuringNativeSchedulingCannotBeOverwrittenByRecognition() async throws {
+    func testReceiptArrivingDuringNativeSchedulingDoesNotScheduleAnotherAlert() async throws {
         let store = try CaptureStore(directory: directory)
         let record = try matched(in: store)
         let started = expectation(description: "Recognition has reached the native scheduler")
@@ -210,8 +217,9 @@ final class NotificationTests: XCTestCase {
         release?.resume()
         await recognition.value
         await delivery.value
-        let request = try await delivered(record, containing: "Spotify")
-        XCTAssertTrue(request.content.title.contains("Spotify"))
+        let request = try await delivered(record, containing: "Song recognized")
+        XCTAssertEqual(request.content.title, "Song recognized")
+        XCTAssertEqual(schedules, 1)
         let pendingRequest = await pending(record)
         XCTAssertNil(pendingRequest)
     }

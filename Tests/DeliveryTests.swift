@@ -136,6 +136,50 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(controller.records.first?.state, .delivered)
     }
 
+    func testUploadOmittedBySessionStaysInFlightUntilItsReceiptIsProcessed() async throws {
+        // URLSession can stop enumerating a completed transfer before its
+        // delegate callback commits the receipt on the main actor.
+        let fixture = try DeliveryFixture(existingTasks: { [] })
+        defer { fixture.cleanUp() }
+        let started = expectation(description: "first upload")
+        var pending: CaptureHTTPStub?
+        var requests = 0
+        CaptureHTTPStub.begin = { request in
+            requests += 1
+            if requests == 1 { pending = request; started.fulfill() }
+        }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [started], timeout: 10)
+        try await fixture.service.enqueue()
+        XCTAssertEqual(fixture.service.uploadingIDs, [fixture.record.id])
+        try XCTUnwrap(pending).complete(data: fixture.receipt)
+        let confirmed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.record.state == .delivered
+        }, object: nil)
+        await fulfillment(of: [confirmed], timeout: 10)
+        XCTAssertEqual(requests, 1, "Waiting for a receipt must not resubmit the same capture")
+        XCTAssertTrue(fixture.service.uploadingIDs.isEmpty)
+    }
+
+    func testRestoredUploadWithOldCredentialsDoesNotBlockCurrentConnection() async throws {
+        var restored: URLSessionTask?
+        let fixture = try DeliveryFixture(existingTasks: { restored.map { [$0] } ?? [] })
+        defer { fixture.cleanUp() }
+        var request = URLRequest(url: URL(string: "https://example.com/capture")!)
+        request.setValue("Bearer obsolete-token", forHTTPHeaderField: "Authorization")
+        restored = fixture.service.session.dataTask(with: request)
+        restored?.taskDescription = fixture.record.id.uuidString
+        defer { restored?.cancel() }
+        let uploaded = expectation(description: "current credentials upload")
+        CaptureHTTPStub.response = { request in
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+            uploaded.fulfill()
+            return (200, [:], fixture.receipt)
+        }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [uploaded], timeout: 2)
+    }
+
     func testOtherRetryDeadlinesContinueWhileAnEarlierUploadIsHeld() async throws {
         let fixture = try DeliveryFixture()
         defer { fixture.cleanUp() }
@@ -471,7 +515,7 @@ private final class DeliveryFixture {
 
     init(connection: @escaping () throws -> DeliveryConfiguration? = {
         try DeliveryConfiguration(endpoint: "https://example.com/capture", token: "test-token")
-    }) throws {
+    }, existingTasks: (() async -> [URLSessionTask])? = nil) throws {
         store = try CaptureStore(directory: directory)
         let generator = SHSignatureGenerator()
         try generator.append(streamingFixture(seconds: 2), at: nil)
@@ -480,7 +524,8 @@ private final class DeliveryFixture {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [CaptureHTTPStub.self]
         service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
-                                  connection: connection, sessionConfiguration: configuration, retryDelay: 0.05)
+                                  connection: connection, sessionConfiguration: configuration, retryDelay: 0.05,
+                                  existingTasks: existingTasks)
     }
 
     func cleanUp() {

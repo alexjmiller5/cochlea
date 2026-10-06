@@ -50,7 +50,7 @@ Tap the capture button again to cancel an accidental recording. Explicit Cancel 
 
 On iOS 18+, the Capture song Shortcut uses the native audio-recording intent and runs without opening the app, including when the app was previously swiped away. Enable Live Activities in the app's system settings. iOS 17 asks to continue in the foreground. Microphone access, native notification authorization and Live Activities are user settings; a replacement phone must be enrolled again with its own Music Sync token.
 
-Recognition waits up to 10 seconds for Spotify delivery before notifying. A confirmed delivery during that window produces one combined notification. Later delivery replaces that notification with an Added to Spotify alert, so each song shows one card. Only a valid Music Sync receipt permits the Spotify confirmation. Denying notifications does not prevent capture or delivery; notification permissions can be changed in iOS Settings.
+Recognition sends one notification with the song and artist. Successful upload or Spotify addition does not replace it or alert again. The capture list shows confirmed delivery separately. A timeout or generic server error leaves the song queued; it does not prove the song is absent from Spotify. Denying notifications does not prevent capture or delivery; notification permissions can be changed in iOS Settings.
 
 ## Mac app
 
