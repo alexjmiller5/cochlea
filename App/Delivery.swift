@@ -95,6 +95,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                 request.httpMethod = "POST"
                 request.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 request.setValue("Bearer " + configuration.token, forHTTPHeaderField: "Authorization")
+                try store.deliveryStarted(record)
                 let task = session.uploadTask(with: request, fromFile: file)
                 task.taskDescription = record.id.uuidString
                 uploadingIDs.insert(record.id)

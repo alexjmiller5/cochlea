@@ -6,6 +6,10 @@ enum CaptureState: String, Codable {
     case pending, matched, delivered, unmatched
 }
 
+enum SpotifyOutcome: String {
+    case added, notAdded = "not_added", unknown
+}
+
 @Model
 final class CaptureRecord {
     @Attribute(.unique) var id: UUID
@@ -24,6 +28,13 @@ final class CaptureRecord {
     var notificationEligible: Bool = false
     var recognitionNotificationDate: Date?
     var deliveryNotificationScheduled: Bool = false
+    var spotifyOutcomeValue: String?
+    var spotifyFailureNotificationDate: Date?
+
+    var spotifyOutcome: SpotifyOutcome? {
+        get { spotifyOutcomeValue.flatMap(SpotifyOutcome.init(rawValue:)) }
+        set { spotifyOutcomeValue = newValue?.rawValue }
+    }
 
     var state: CaptureState {
         get { CaptureState(rawValue: stateValue) ?? .pending }
@@ -115,6 +126,15 @@ final class CaptureStore {
         try save()
     }
 
+    func deliveryStarted(_ record: CaptureRecord) throws {
+        // A new request may reach Spotify. A previous pre-mutation failure no
+        // longer proves the current outcome, even if this process is terminated.
+        if record.spotifyOutcome == .notAdded {
+            record.spotifyOutcome = nil
+            try save()
+        }
+    }
+
     func deliveryFinished(_ record: CaptureRecord, status: Int, data: Data, retryAfter: String? = nil,
                           now: Date = Date(), retryDelay: TimeInterval = 30) throws {
         guard record.state == .matched else { return }
@@ -123,12 +143,31 @@ final class CaptureStore {
             let capture_id: UUID?
             let isrc: String?
         }
+        struct OutcomeReceipt: Decodable {
+            let spotify_outcome: String?
+        }
         let receipt = try? JSONDecoder().decode(Receipt.self, from: data)
+        // Decode the additive field separately: malformed optional data must not
+        // invalidate the service's established successful acknowledgement.
+        let outcomeValue = try? JSONDecoder().decode(OutcomeReceipt.self, from: data).spotify_outcome
+        let trustedReceipt = ((200..<300).contains(status) || (400..<600).contains(status)) &&
+            status != 401 && status != 403 && receipt?.capture_id == record.id
+        let outcome = trustedReceipt ? outcomeValue.flatMap(SpotifyOutcome.init(rawValue:)) : nil
+        // Explicit unknown means the service crossed its durable attempt marker.
+        // Neither that fact nor an acknowledged addition can later be downgraded.
+        if record.spotifyOutcome != .added {
+            if outcome == .added {
+                record.spotifyOutcome = .added
+            } else if record.spotifyOutcome != .unknown {
+                record.spotifyOutcome = outcome == .notAdded && receipt?.ok != false ? nil : outcome
+            }
+        }
         if (200..<300).contains(status), receipt?.ok == true,
            receipt?.capture_id == record.id, let isrc = receipt?.isrc,
            !isrc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
            record.isrc == nil || record.isrc == isrc.replacingOccurrences(of: "-", with: "").uppercased() {
             record.state = .delivered
+            record.spotifyOutcome = .added
             record.lastError = nil
             record.nextAttemptAt = nil
             record.deliveryBlocked = false

@@ -1,5 +1,6 @@
 import Foundation
 import ShazamKit
+import UserNotifications
 import XCTest
 @testable import Cochlea
 
@@ -340,6 +341,63 @@ final class DeliveryTests: XCTestCase {
         fixture.service.session.finishTasksAndInvalidate()
         await fulfillment(of: [unexpected], timeout: 0.4)
         XCTAssertEqual(fixture.record.state, .matched)
+    }
+
+    func testStartingRetryInvalidatesAnUnannouncedNotAddedReceipt() async throws {
+        let fixture = try DeliveryFixture()
+        defer { fixture.cleanUp() }
+        let id = fixture.record.id.uuidString.lowercased()
+        try fixture.store.deliveryFinished(fixture.record, status: 503,
+            data: Data("{\"ok\":false,\"capture_id\":\"\(id)\",\"spotify_outcome\":\"not_added\"}".utf8))
+        fixture.record.nextAttemptAt = .distantPast
+        try fixture.store.save()
+        let started = expectation(description: "retry in flight")
+        CaptureHTTPStub.begin = { _ in started.fulfill() }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [started], timeout: 5)
+        // Check persisted state, since background uploads can outlive the app.
+        let reopened = try CaptureStore(directory: fixture.directory)
+        var requests: [UNNotificationRequest] = []
+        await CaptureNotifications(authorization: { .authorized }, schedule: { requests.append($0) },
+            existingRequests: { ([], []) }).reconcile(store: reopened)
+        XCTAssertEqual(requests.map(\.content.title), ["Song recognized"])
+    }
+
+    func testOutcomeRetriesKeepImmutablePayloadAndOnlyAnnounceDefinitiveFailure() async throws {
+        let fixture = try DeliveryFixture()
+        defer { fixture.cleanUp() }
+        var requests: [UNNotificationRequest] = []
+        let notifications = CaptureNotifications(authorization: { .authorized }, schedule: { requests.append($0) },
+                                                  existingRequests: { ([], []) })
+        let confirmed = expectation(description: "all durable stages reconciled")
+        fixture.service.onRecordsChanged = {
+            await notifications.reconcile(store: fixture.store)
+            if fixture.record.state == .delivered { confirmed.fulfill() }
+        }
+        await notifications.reconcile(store: fixture.store)
+        let id = fixture.record.id.uuidString.lowercased()
+        var bodies: [Data] = []
+        var dates: [Date] = []
+        CaptureHTTPStub.response = { request in
+            bodies.append(request.httpBody ?? Data())
+            dates.append(Date())
+            let outcome = bodies.count == 1 ? "not_added" : bodies.count == 2 ? "unknown" : "added"
+            let ok = bodies.count >= 4
+            return (ok ? 200 : 503, ["Retry-After": "0.15"],
+                Data("{\"ok\":\(ok),\"capture_id\":\"\(id)\",\"isrc\":\"XX0000000001\",\"spotify_outcome\":\"\(outcome)\"}".utf8))
+        }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [confirmed], timeout: 10)
+        XCTAssertEqual(bodies.count, 4)
+        XCTAssertEqual(Set(bodies).count, 1, "Retries must send exactly the same capture ID and metadata")
+        let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(bodies.first)) as? [String: Any])
+        XCTAssertEqual(payload["capture_id"] as? String, id)
+        for (first, second) in zip(dates, dates.dropFirst()) {
+            XCTAssertGreaterThanOrEqual(second.timeIntervalSince(first), 0.15)
+        }
+        XCTAssertEqual(requests.map(\.content.title), ["Song recognized", "Couldn't add to Spotify"])
+        XCTAssertEqual(fixture.record.state, .delivered)
+        fixture.service.onRecordsChanged = nil
     }
 
     func testTransientFailureRetriesWithoutAnotherInvocation() async throws {

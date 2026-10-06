@@ -93,5 +93,43 @@ final class CaptureNotifications {
                 // Notification failure is optional; the next reconciliation retries without changing the song queue.
             }
         }
+        for record in records {
+            await updateSpotifyFailure(record, store: store, existing: pending + delivered)
+        }
     }
+
+    private func updateSpotifyFailure(_ record: CaptureRecord, store: CaptureStore,
+                                      existing: [UNNotificationRequest]) async {
+        let identifier = "capture.spotify-failure." + record.id.uuidString
+        guard record.state == .matched, record.spotifyOutcome == .notAdded,
+              let metadata = record.metadata else {
+            center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            return
+        }
+        do {
+            if record.spotifyFailureNotificationDate == nil,
+               existing.contains(where: { $0.identifier == identifier }) {
+                record.spotifyFailureNotificationDate = Date()
+                try store.save()
+            }
+            guard record.spotifyFailureNotificationDate == nil else { return }
+            let content = UNMutableNotificationContent()
+            content.title = "Couldn't add to Spotify"
+            content.body = metadata.title + " by " + metadata.artist +
+                ". Saved for retry. Open Cochlea to check delivery."
+            content.sound = .default
+            content.interruptionLevel = .active
+            content.userInfo = ["captureID": record.id.uuidString, "stage": "spotify_not_added"]
+            try await schedule(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
+            // A retry may have advanced while the OS accepted the request.
+            if record.spotifyOutcome != .notAdded {
+                center.removePendingNotificationRequests(withIdentifiers: [identifier])
+            }
+            record.spotifyFailureNotificationDate = Date()
+            try store.save()
+        } catch {
+            // Keep the capture queued; reconciliation can retry notification scheduling.
+        }
+    }
+
 }
