@@ -35,3 +35,11 @@ Cochlea owns its app, local queue, signatures, and device Keychain connection. M
 Client enrollment asks only for an HTTPS capture URL and an app-issued bearer token, saved in Keychain - from Music Sync's enrollment link (`offlineshazam://enroll?url=&token=`, `DeliveryConfiguration.fromEnrollLink`, handled by `Runtime.enroll`), never typed in: Settings only shows the connected host and Disconnect (`ConnectionStore.delete`). No credentials or personal configuration belong in source, Info.plist, defaults, fixture data, or logs. No app runtime secrets belong in this repository. The release workflow uses the dedicated cochlea-ci service account. There is no analytics dependency.
 
 The shipped app and extension bundle identifiers remain `com.alexmiller.offline-shazam` and its `.activity` suffix. Enrollment accepts `cochlea` and `offlineshazam` URL schemes for compatibility. Startup atomically moves the complete `offline-shazam` Application Support directory to `cochlea`; an existing destination causes an error rather than overwriting either queue.
+
+## Nix distribution
+
+`nix/package.nix` preserves the published signed archive without fixup or stripping.
+`nix/darwin.nix` exports generic enable/package/migrateFromHomebrew options; early
+checks precede application publication and the exact non-zap cask removal precedes
+Homebrew cleanup. Keep the cask publisher available for Homebrew consumers.
+Migration receipts and runtime data never belong in source.
