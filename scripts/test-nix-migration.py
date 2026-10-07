@@ -97,6 +97,17 @@ class MigrationTests(unittest.TestCase):
                 self.assertFalse(self.marker.exists())
                 manifest.write_text("signed bytes"); self.env["SIGNATURE"] = "0"
 
+    def test_finder_metadata_does_not_block_a_verified_bundle(self):
+        (self.destination / ".DS_Store").write_bytes(b"Finder metadata")
+        result = self.run_script("migrate")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(self.marker.exists())
+
+    def test_extra_application_content_still_fails(self):
+        (self.destination / "unexpected-code").write_bytes(b"unexpected")
+        self.assertNotEqual(self.run_script("migrate").returncode, 0)
+        self.assertFalse(self.marker.exists())
+
     def test_clean_repeated_activation_is_a_noop(self):
         self.receipt.unlink(); self.metadata.rmdir(); self.metadata.parent.rmdir()
         self.assertEqual(self.run_script().returncode, 0)

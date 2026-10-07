@@ -31,7 +31,7 @@ esac
 # the previous owner; failures abort before Homebrew cleanup=zap can run.
 [[ -d "$destination" ]] || fail 'Nix application has not been published'
 codesign --verify --deep --strict "$destination" || fail 'Nix application signature is invalid'
-diff -qr "$source" "$destination" || fail 'Nix application differs from package'
+diff -qr -x .DS_Store "$source" "$destination" || fail 'Nix application differs from package'
 HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 HOMEBREW_NO_AUTOREMOVE=1 \
   "$prefix/bin/brew" uninstall --cask alexjmiller5/tap/cochlea
 [[ ! -e "$receipt" ]] || fail 'uninstall left its receipt; refusing subsequent cleanup'
