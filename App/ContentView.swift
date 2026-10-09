@@ -147,7 +147,8 @@ private struct CaptureRow: View {
             if record.state == .unmatched {
                 HStack(spacing: 20) {
                     Button("Retry", action: retry)
-                    Button("Delete", role: .destructive) { confirmingDelete = true }
+                    // macOS draws a borderless destructive button in the accent color.
+                    Button("Delete", role: .destructive) { confirmingDelete = true }.foregroundStyle(.red)
                 }
                 .font(.caption.weight(.semibold))
                 .buttonStyle(.borderless)
