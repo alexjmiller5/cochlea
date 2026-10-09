@@ -116,6 +116,9 @@ struct ContentView: View {
             }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { Task { await resumeAfterActivation() } }
+                #if os(iOS)
+                if phase == .background { Runtime.scheduleStatusRefresh() }
+                #endif
             }
         }
         .tint(blue)
@@ -168,19 +171,20 @@ private struct CaptureRow: View {
     }
 
     private var needsAttention: Bool {
-        record.state == .matched && (record.deliveryBlocked || connectionIssue != nil || record.deliveryStatus == .notOnSpotify)
+        record.awaitsSpotify && (record.deliveryBlocked || connectionIssue != nil || record.deliveryStatus == .notOnSpotify)
     }
 
     private var color: Color {
         if record.state == .delivered { return .green }
         if needsAttention { return .orange }
+        if record.state == .accepted { return .teal }
         return record.state == .matched ? .blue : .secondary
     }
 
     private var icon: String {
         if record.state == .delivered { return "CircleCheck" }
         if record.state == .unmatched || needsAttention { return "AlertCircle" }
-        return "Clock"
+        return record.state == .accepted ? "CircleCheck" : "Clock"
     }
 }
 

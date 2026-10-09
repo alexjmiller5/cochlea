@@ -110,7 +110,8 @@ struct ConnectionStore {
 // The capture endpoint authenticates before validating payloads. An empty object
 // exercises that boundary without resolving or adding a Spotify track.
 final class ConnectionVerifier: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    static let acceptedMessage = "capture requires capture_id, title, artist, apple_music_id and shazam_url; isrc is optional"
+    /// Music Sync's validation message for an empty capture; its list of optional fields grows over time.
+    static let acceptedMessage = "capture requires capture_id, title, artist, apple_music_id and shazam_url;"
 
     func verify(_ connection: DeliveryConfiguration,
                 sessionConfiguration: URLSessionConfiguration = .ephemeral) async throws {
@@ -137,7 +138,7 @@ final class ConnectionVerifier: NSObject, URLSessionTaskDelegate, @unchecked Sen
         struct Rejection: Decodable { let ok: Bool; let message: String }
         guard response.statusCode == 422,
               let result = try? JSONDecoder().decode(Rejection.self, from: data),
-              !result.ok, result.message == Self.acceptedMessage else { throw ConnectionCheckError.wrongEndpoint }
+              !result.ok, result.message.hasPrefix(Self.acceptedMessage) else { throw ConnectionCheckError.wrongEndpoint }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask,

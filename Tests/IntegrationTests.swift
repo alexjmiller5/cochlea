@@ -110,6 +110,21 @@ final class IntegrationTests: XCTestCase {
         }
     }
 
+    func testConnectionCheckAcceptsTheServiceValidationMessageAsItGrows() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [CaptureHTTPStub.self]
+        defer { CaptureHTTPStub.response = nil }
+        let connection = try DeliveryConfiguration(endpoint: "https://example.com/capture", token: "token")
+        for message in ["capture requires capture_id, title, artist, apple_music_id and shazam_url; isrc is optional",
+                        "capture requires capture_id, title, artist, apple_music_id and shazam_url; isrc and recognized_at are optional"] {
+            CaptureHTTPStub.response = { _ in (422, [:], try! JSONSerialization.data(withJSONObject: ["ok": false, "message": message])) }
+            try await ConnectionVerifier().verify(connection, sessionConfiguration: configuration)
+        }
+        CaptureHTTPStub.response = { _ in (422, [:], Data(#"{"ok":false,"message":"title is required"}"#.utf8)) }
+        do { try await ConnectionVerifier().verify(connection, sessionConfiguration: configuration); XCTFail("Not Music Sync") }
+        catch { XCTAssertEqual(error as? ConnectionCheckError, .wrongEndpoint) }
+    }
+
     func testUploadIncludesRecordingIdentityWhenShazamProvidesIt() throws {
         let metadata = MatchMetadata(title: "Example Song", artist: "Example Artist", isrc: "XX0000000001")
         let body = try CapturePayload(id: UUID(), metadata: metadata).data()

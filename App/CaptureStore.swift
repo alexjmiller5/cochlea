@@ -3,7 +3,8 @@ import ShazamKit
 import SwiftData
 
 enum CaptureState: String, Codable {
-    case pending, matched, delivered, unmatched
+    // accepted: Music Sync stored the capture and adds it to Spotify from its own queue.
+    case pending, matched, accepted, delivered, unmatched
 }
 
 enum SpotifyOutcome: String {
@@ -59,6 +60,9 @@ final class CaptureRecord {
         createdAt = Date()
         stateValue = CaptureState.pending.rawValue
     }
+
+    /// Identified, but not yet confirmed on Spotify.
+    var awaitsSpotify: Bool { state == .matched || state == .accepted }
 
     var metadata: MatchMetadata? {
         guard let title, let artist else { return nil }
@@ -191,6 +195,7 @@ final class CaptureStore {
             let capture_id: UUID?
             let isrc: String?
             let reason: String?
+            let status: String?
         }
         struct OutcomeReceipt: Decodable {
             let spotify_outcome: String?
@@ -212,17 +217,18 @@ final class CaptureStore {
             }
         }
         if (200..<300).contains(status), receipt?.ok == true,
-           receipt?.capture_id == record.id, let isrc = receipt?.isrc,
-           !isrc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-           record.isrc == nil || record.isrc == isrc.replacingOccurrences(of: "-", with: "").uppercased() {
-            record.state = .delivered
-            record.spotifyOutcome = .added
+           receipt?.capture_id == record.id, let isrc = receipt?.isrc, Self.confirms(isrc, record) {
+            markDelivered(record)
+        } else if status == 202, receipt?.ok == true, receipt?.capture_id == record.id, receipt?.status == "queued" {
+            // Stored by Music Sync: the upload is done and its own queue reaches Spotify.
+            record.state = .accepted
             record.lastError = nil
-            record.nextAttemptAt = nil
             record.deliveryBlocked = false
             record.deliveryStatus = nil
             record.failedDeliveries = 0
             record.deliveryStartedAt = nil
+            let firstCheck = max(retryDelay / 2, Self.retryAfterDelay(retryAfter, now: now) ?? 0)
+            record.nextAttemptAt = now.addingTimeInterval(firstCheck)
         } else {
             record.deliveryBlocked = status == 401 || status == 403
             record.deliveryStartedAt = nil
@@ -254,6 +260,77 @@ final class CaptureStore {
             try? FileManager.default.removeItem(at: signatureURL(record))
         }
     }
+
+    private static func isoDate(_ value: String) -> Date? {
+        let format = ISO8601DateFormatter()
+        format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return format.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    private static func confirms(_ isrc: String, _ record: CaptureRecord) -> Bool {
+        !isrc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            (record.isrc == nil || record.isrc == isrc.replacingOccurrences(of: "-", with: "").uppercased())
+    }
+
+    private func markDelivered(_ record: CaptureRecord) {
+        record.state = .delivered
+        record.spotifyOutcome = .added
+        record.lastError = nil
+        record.nextAttemptAt = nil
+        record.deliveryBlocked = false
+        record.deliveryStatus = nil
+        record.failedDeliveries = 0
+        record.deliveryStartedAt = nil
+    }
+
+    /// Music Sync's answer to `GET <endpoint>/<capture_id>` for an accepted capture.
+    func statusChecked(_ record: CaptureRecord, status: Int, data: Data, now: Date = Date(),
+                       retryDelay: TimeInterval = 30) throws {
+        guard record.state == .accepted else { return }
+        struct View: Decodable {
+            let capture_id: UUID?
+            let status: String?
+            let isrc: String?
+            let retry_at: String?
+            let reason: String?
+        }
+        let view = status == 200 ? try? JSONDecoder().decode(View.self, from: data) : nil
+        let serverRetry = view?.retry_at.flatMap(Self.isoDate)
+        func checkLater() {
+            let backoff = min(3600, retryDelay * pow(2, Double(min(record.failedDeliveries, 16))))
+            record.nextAttemptAt = max(now.addingTimeInterval(backoff), serverRetry ?? .distantPast)
+            record.failedDeliveries += 1
+        }
+        if status == 404 {
+            // Music Sync does not know it: send it again (the capture ID makes that safe).
+            record.state = .matched
+            record.nextAttemptAt = nil
+            record.deliveryStatus = nil
+            record.failedDeliveries = 0
+            record.lastError = nil
+        } else if status == 401 || status == 403 || (view?.capture_id == record.id && view?.status == "rejected") {
+            record.deliveryBlocked = true
+            record.nextAttemptAt = nil
+            record.lastError = "Connection needs attention in Settings."
+        } else if let view, view.capture_id == record.id, view.status == "added",
+                  let isrc = view.isrc, Self.confirms(isrc, record) {
+            markDelivered(record)
+        } else if let view, view.capture_id == record.id, view.status == "not_added", view.reason == "no_match" {
+            let next = serverRetry ?? now.addingTimeInterval(86400)
+            record.deliveryStatus = .notOnSpotify
+            record.spotifyOutcome = .notAdded
+            record.failedDeliveries = 0
+            record.nextAttemptAt = max(next, now.addingTimeInterval(retryDelay))
+            record.lastError = "Music Sync checks Spotify again " + CaptureRecord.retryTime(next, now: now) + "."
+        } else {
+            if view?.capture_id == record.id { record.deliveryStatus = nil }
+            checkLater()
+        }
+        try save()
+        if record.state == .delivered {
+            try? FileManager.default.removeItem(at: signatureURL(record))
+        }
+    }
 }
 
 extension CaptureRecord {
@@ -263,13 +340,16 @@ extension CaptureRecord {
         case .pending: return "Saved for identification"
         case .delivered: return "Added to Spotify"
         case .unmatched: return "Not identified"
+        case .accepted:
+            if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
+            return deliveryStatus == .notOnSpotify ? "Not on Spotify (no exact match)" : "Saved to Music Sync"
         case .matched:
             if !isOnline { return "Waiting for internet" }
             if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
             if isUploading { return "Sending to Spotify…" }
             guard let next = nextAttemptAt else { return "Queued for Spotify" }
             switch deliveryStatus {
-            case .notOnSpotify: return "Not on Spotify yet, checking daily"
+            case .notOnSpotify: return "Not on Spotify (no exact match)"
             case .spotifyBusy: return "Spotify busy, retrying at " + Self.retryTime(next, now: now)
             case .retrying, nil: return "Retrying at " + Self.retryTime(next, now: now)
             }

@@ -45,7 +45,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
         do {
             currentConfiguration = try connection()
             if currentConfiguration == nil { connectionIssue = "Connect Music Sync in Settings to add songs to Spotify." }
-            else if try store.records().contains(where: { $0.state == .matched && $0.deliveryBlocked }) {
+            else if try store.records().contains(where: { $0.awaitsSpotify && $0.deliveryBlocked }) {
                 connectionIssue = ConnectionCheckError.rejected.localizedDescription
             }
         } catch { connectionIssue = error.localizedDescription }
@@ -74,7 +74,9 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                 connectionIssue = "Connect Music Sync in Settings to add songs to Spotify."
                 return
             }
-            let records = try store.records().filter { $0.state == .matched }
+            let all = try store.records()
+            let records = all.filter { $0.state == .matched }
+            let accepted = all.filter { $0.state == .accepted && !$0.deliveryBlocked }
             let started = Dictionary(records.map { ($0.id, $0.deliveryStartedAt) }, uniquingKeysWith: { first, _ in first })
             // URLSession may omit a finished transfer before its completion
             // callback persists the receipt. Keep our IDs until that callback;
@@ -92,7 +94,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                     task.cancel()
                 }
             }
-            guard !records.contains(where: \.deliveryBlocked) else {
+            guard !all.contains(where: { $0.awaitsSpotify && $0.deliveryBlocked }) else {
                 connectionIssue = ConnectionCheckError.rejected.localizedDescription
                 return
             }
@@ -115,7 +117,11 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                 uploadingIDs.insert(record.id)
                 task.resume()
             }
-            let next = records.filter { !uploadingIDs.contains($0.id) && $0.metadata != nil }
+            if await checkStatuses(accepted.filter { ($0.nextAttemptAt ?? .distantPast) <= Date() }, configuration) {
+                await onRecordsChanged?()
+            }
+            let next = (records.filter { !uploadingIDs.contains($0.id) && $0.metadata != nil } +
+                        accepted.filter { $0.state == .accepted && !$0.deliveryBlocked })
                 .compactMap(\.nextAttemptAt).min()
             if let next { scheduleRetry(at: next) }
         } catch {
@@ -129,7 +135,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
     // must not indefinitely block a now-valid connection and all newer songs.
     func recoverConnection() async {
         guard !checkingConnection, !changingConnection, Date() >= nextConnectionCheck,
-              (try? store.records().contains(where: { $0.state == .matched && $0.deliveryBlocked })) == true else { return }
+              (try? store.records().contains(where: { $0.awaitsSpotify && $0.deliveryBlocked })) == true else { return }
         _ = await verifyConnection()
     }
 
@@ -153,7 +159,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                   latest.token == configuration.token else { return false }
             connectionVerified = true
             connectionIssue = nil
-            if try store.records().contains(where: { $0.state == .matched && $0.deliveryBlocked }) {
+            if try store.records().contains(where: { $0.awaitsSpotify && $0.deliveryBlocked }) {
                 try await connectionChanged()
             }
             return true
@@ -176,7 +182,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
         }
         uploadingIDs.removeAll()
         defer { changingConnection = false; onChange?() }
-        for record in try store.records() where record.state == .matched {
+        for record in try store.records() where record.awaitsSpotify {
             record.nextAttemptAt = nil
             record.deliveryBlocked = false
             record.lastError = nil
@@ -184,6 +190,30 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
         try store.save()
         changingConnection = false
         try await enqueue()
+    }
+
+    /// Asks Music Sync what became of accepted captures; true when any changed.
+    private func checkStatuses(_ records: [CaptureRecord], _ configuration: DeliveryConfiguration) async -> Bool {
+        guard !records.isEmpty else { return false }
+        // Its own short-lived session: the background session's delegate tracks uploads by task ID.
+        let checkConfiguration = URLSessionConfiguration.ephemeral
+        checkConfiguration.protocolClasses = sessionConfiguration.protocolClasses
+        checkConfiguration.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: checkConfiguration)
+        defer { session.finishTasksAndInvalidate() }
+        for record in records.prefix(20) {
+            var request = URLRequest(url: configuration.endpoint.appendingPathComponent(record.id.uuidString.lowercased()))
+            request.setValue("Bearer " + configuration.token, forHTTPHeaderField: "Authorization")
+            var status = 0
+            var data = Data()
+            if let (body, response) = try? await session.data(for: request, delegate: RefuseRedirects()) {
+                status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                data = body
+            }
+            guard !invalidated, !changingConnection, record.state == .accepted else { continue }
+            try? store.statusChecked(record, status: status, data: data, retryDelay: retryDelay)
+        }
+        return true
     }
 
     private func scheduleRetry(at date: Date) {
@@ -277,4 +307,9 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
             }
         }
     }
+}
+
+private final class RefuseRedirects: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest) async -> URLRequest? { nil }
 }

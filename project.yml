@@ -33,7 +33,8 @@ targets:
         UILaunchScreen: {}
         NSMicrophoneUsageDescription: Record a short clip to identify music, including when offline.
         NSSupportsLiveActivities: true
-        UIBackgroundModes: [audio]
+        UIBackgroundModes: [audio, fetch]
+        BGTaskSchedulerPermittedIdentifiers: [$(PRODUCT_BUNDLE_IDENTIFIER).status]
         ITSAppUsesNonExemptEncryption: false
         # offlineshazam://enroll?url=&token= from Music Sync's enrollment page
         CFBundleURLTypes:

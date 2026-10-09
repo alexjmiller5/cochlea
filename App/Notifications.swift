@@ -42,14 +42,14 @@ final class CaptureNotifications {
         }
         let (pending, delivered) = await existingRequests()
         guard let records = try? store.records() else { return }
-        for record in records where record.state == .matched || record.state == .delivered {
+        for record in records where record.state == .matched || record.state == .accepted || record.state == .delivered {
             let identifier = "capture." + record.id.uuidString
             let legacyPending = pending.contains {
                 $0.identifier == identifier && $0.content.userInfo["stage"] as? String == "delivered"
             }
             let existing = (pending.filter { $0.content.userInfo["stage"] as? String != "delivered" } + delivered)
                 .filter { $0.identifier == identifier }
-            guard record.state == .matched || record.notificationEligible || !existing.isEmpty || legacyPending,
+            guard record.awaitsSpotify || record.notificationEligible || !existing.isEmpty || legacyPending,
                   let metadata = record.metadata else { continue }
             do {
                 // The old combined card may have replaced recognition before either
@@ -101,7 +101,8 @@ final class CaptureNotifications {
     private func updateSpotifyFailure(_ record: CaptureRecord, store: CaptureStore,
                                       existing: [UNNotificationRequest]) async {
         let identifier = "capture.spotify-failure." + record.id.uuidString
-        guard record.state == .matched, record.spotifyOutcome == .notAdded,
+        // A queued 202 carries no not_added proof; Music Sync's later no-match does.
+        guard record.awaitsSpotify, record.spotifyOutcome == .notAdded,
               let metadata = record.metadata else {
             center.removePendingNotificationRequests(withIdentifiers: [identifier])
             return

@@ -1,6 +1,7 @@
 import Network
 import UserNotifications
 #if os(iOS)
+import BackgroundTasks
 import UIKit
 #else
 import AppKit
@@ -88,6 +89,20 @@ enum Runtime {
         }
     }
 
+    #if os(iOS)
+    static let statusRefreshIdentifier = (Bundle.main.bundleIdentifier ?? "cochlea") + ".status"
+
+    /// Asks iOS for a background chance to check captures Music Sync still holds.
+    static func scheduleStatusRefresh() {
+        guard case .success(let controller) = controller,
+              let next = controller.records.filter({ $0.state == .accepted && !$0.deliveryBlocked })
+                .compactMap(\.nextAttemptAt).min() else { return }
+        let request = BGAppRefreshTaskRequest(identifier: statusRefreshIdentifier)
+        request.earliestBeginDate = max(next, Date().addingTimeInterval(15 * 60))
+        try? BGTaskScheduler.shared.submit(request)
+    }
+    #endif
+
     // Reconnecting resumes queued work while the app is running.
     static func startConnectivityMonitor(_ monitor: NWPathMonitor) {
         monitor.pathUpdateHandler = { path in
@@ -122,6 +137,15 @@ final class AppDelegate: NSObject, UNUserNotificationCenterDelegate {
     #if os(iOS)
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         start()
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: Runtime.statusRefreshIdentifier, using: nil) { task in
+            Task { @MainActor in
+                let work = Task { try? await Runtime.controller.get().delivery.enqueue() }
+                task.expirationHandler = { work.cancel() }
+                await work.value
+                Runtime.scheduleStatusRefresh()
+                task.setTaskCompleted(success: true)
+            }
+        }
         return true
     }
 

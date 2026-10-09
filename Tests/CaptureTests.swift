@@ -276,9 +276,92 @@ final class CaptureTests: XCTestCase {
             XCTAssertEqual(record.deliveryStatus, .notOnSpotify)
             XCTAssertEqual(record.nextAttemptAt, now.addingTimeInterval(86400), "Checked once a day, never every 30 seconds")
             XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
-                           "Not on Spotify yet, checking daily")
+                           "Not on Spotify (no exact match)")
         }
         XCTAssertEqual(try CaptureStore(directory: directory).records().first?.deliveryStatus, .notOnSpotify)
+    }
+
+    func testAcceptedCaptureIsSavedToMusicSyncAndItsStatusDecidesTheOutcome() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist", isrc: "XX0000000001"))
+        let other = try store.capture(signature: makeSignature())
+        try store.matched(other, metadata: MatchMetadata(title: "Other Song", artist: "Example Artist"))
+        let now = Date(timeIntervalSince1970: 1000)
+        let queued = view(record, status: "queued")
+        try store.deliveryFinished(record, status: 202, data: queued, now: now)
+        XCTAssertEqual(record.state, .accepted, "Music Sync holds it now; the upload is done")
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now), "Saved to Music Sync")
+        XCTAssertEqual(record.nextAttemptAt, now.addingTimeInterval(15), "The first status check follows shortly")
+        try store.deliveryFinished(other, status: 202, data: queued, now: now)
+        XCTAssertEqual(other.state, .matched, "Another capture's acceptance proves nothing")
+
+        try store.statusChecked(record, status: 200, data: view(record, status: "queued", retryAt: "1970-01-01T00:30:00.000Z"), now: now)
+        XCTAssertEqual(record.nextAttemptAt, Date(timeIntervalSince1970: 1800), "Music Sync's retry time decides the next check")
+        var delays: [TimeInterval] = []
+        for _ in 0..<3 {
+            try store.statusChecked(record, status: 200, data: queued, now: now)
+            delays.append(try XCTUnwrap(record.nextAttemptAt).timeIntervalSince(now))
+        }
+        XCTAssertEqual(delays, [60, 120, 240], "Checks back off while it stays queued")
+        XCTAssertEqual(record.state, .accepted)
+
+        try store.statusChecked(record, status: 200, data: view(record, status: "added", isrc: "XX0000000001"), now: now)
+        XCTAssertEqual(record.state, .delivered)
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now), "Added to Spotify")
+        XCTAssertThrowsError(try store.signature(for: record), "Delivery removes the signature")
+        XCTAssertEqual(try CaptureStore(directory: directory).records().first { $0.id == record.id }?.state, .delivered)
+    }
+
+    func testStatusCheckShowsNotOnSpotifyAndRecoversAMissingOrRejectedCapture() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let now = Date(timeIntervalSince1970: 1000)
+        func accepted() throws -> CaptureRecord {
+            let record = try store.capture(signature: makeSignature())
+            try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+            try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"), now: now)
+            return record
+        }
+        let missing = try accepted()
+        try store.statusChecked(missing, status: 200, data: view(missing, status: "not_added", reason: "no_match",
+                                                                 retryAt: "1970-01-02T00:00:00.000Z"), now: now)
+        XCTAssertEqual(missing.state, .accepted)
+        XCTAssertEqual(missing.deliveryStatus, .notOnSpotify)
+        XCTAssertEqual(missing.spotifyOutcome, .notAdded)
+        XCTAssertEqual(missing.nextAttemptAt, Date(timeIntervalSince1970: 86400))
+        XCTAssertEqual(missing.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Not on Spotify (no exact match)")
+        XCTAssertEqual(missing.lastError, "Music Sync checks Spotify again " + CaptureRecord.retryTime(Date(timeIntervalSince1970: 86400), now: now) + ".")
+
+        let forgotten = try accepted()
+        try store.statusChecked(forgotten, status: 404, data: Data(), now: now)
+        XCTAssertEqual(forgotten.state, .matched, "A capture Music Sync does not know is sent again")
+        XCTAssertNil(forgotten.nextAttemptAt)
+
+        let revoked = try accepted()
+        try store.statusChecked(revoked, status: 200, data: view(revoked, status: "rejected"), now: now)
+        XCTAssertEqual(revoked.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now), "Needs reconnect")
+        let unauthorized = try accepted()
+        try store.statusChecked(unauthorized, status: 401, data: Data(), now: now)
+        XCTAssertTrue(unauthorized.deliveryBlocked)
+
+        let mismatched = try accepted()
+        try store.statusChecked(mismatched, status: 200, data: view(revoked, status: "added", isrc: "XX0000000001"), now: now)
+        XCTAssertEqual(mismatched.state, .accepted, "Another capture's status proves nothing")
+    }
+
+    private func view(_ record: CaptureRecord, status: String, isrc: String? = nil, reason: String? = nil,
+                      retryAt: String? = nil) -> Data {
+        let fields: [String: Any] = [
+            "ok": status != "not_added", "capture_id": record.id.uuidString.lowercased(), "status": status,
+            "spotify_outcome": status == "added" ? "added" : "not_added", "isrc": isrc ?? NSNull(),
+            "title": "Example Song", "artist": "Example Artist", "retry_at": retryAt ?? NSNull(), "reason": reason ?? NSNull(),
+        ]
+        return try! JSONSerialization.data(withJSONObject: fields)
     }
 
     func testSpotifyRateLimitShowsBusyUntilItsRetryAfter() throws {

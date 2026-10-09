@@ -157,6 +157,21 @@ final class SpotifyOutcomeTests: XCTestCase {
         await notifier { _ in XCTFail("Recovered history must survive notification dismissal") }.reconcile(store: recovery)
     }
 
+    func testQueuedCaptureAlertsOnlyOnceMusicSyncFindsNoExactMatch() async throws {
+        let (store, record) = try fixture()
+        var requests: [UNNotificationRequest] = []
+        let notifications = notifier { requests.append($0) }
+        await notifications.reconcile(store: store)
+        let id = record.id.uuidString.lowercased()
+        try store.deliveryFinished(record, status: 202, data: Data(#"{"ok":true,"capture_id":"\#(id)","status":"queued","spotify_outcome":"not_added"}"#.utf8))
+        await notifications.reconcile(store: store)
+        XCTAssertEqual(requests.map(\.content.title), ["Song recognized"], "Queued is not a failure")
+        try store.statusChecked(record, status: 200, data: Data(#"{"capture_id":"\#(id)","status":"not_added","spotify_outcome":"not_added","reason":"no_match","retry_at":null}"#.utf8))
+        await notifications.reconcile(store: store)
+        await notifications.reconcile(store: store)
+        XCTAssertEqual(requests.map(\.content.title), ["Song recognized", "Couldn't add to Spotify"])
+    }
+
     private func notifier(schedule: @escaping (UNNotificationRequest) async throws -> Void) -> CaptureNotifications {
         CaptureNotifications(authorization: { .authorized }, schedule: schedule, existingRequests: { ([], []) })
     }

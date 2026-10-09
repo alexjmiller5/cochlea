@@ -214,6 +214,37 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(requests, 1)
     }
 
+    func testQueuedCaptureIsConfirmedByAStatusCheckWithoutAnotherUpload() async throws {
+        let fixture = try DeliveryFixture()
+        defer { fixture.cleanUp() }
+        let id = fixture.record.id.uuidString.lowercased()
+        let queued = Data(#"{"ok":true,"capture_id":"\#(id)","status":"queued","spotify_outcome":"not_added","isrc":null,"title":"Example Song","artist":"Example Artist","retry_at":null,"reason":null}"#.utf8)
+        let added = Data(#"{"capture_id":"\#(id)","status":"added","spotify_outcome":"added","isrc":"XX0000000001","title":"Example Song","artist":"Example Artist","retry_at":null,"reason":null}"#.utf8)
+        var posts = 0
+        var checks: [URLRequest] = []
+        var acceptedWhileChecked: [Bool] = []
+        CaptureHTTPStub.response = { request in
+            if request.httpMethod == "GET" {
+                checks.append(request)
+                acceptedWhileChecked.append(fixture.service.uploadingIDs.isEmpty)
+                return (200, [:], checks.count == 1 ? queued : added)
+            }
+            posts += 1
+            return (202, [:], queued)
+        }
+        let delivered = expectation(description: "the status check confirms the add")
+        fixture.service.onChange = {
+            if fixture.record.state == .delivered { fixture.service.onChange = nil; delivered.fulfill() }
+        }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [delivered], timeout: 10)
+        XCTAssertEqual(posts, 1, "Accepted captures are never uploaded again")
+        XCTAssertEqual(checks.count, 2)
+        XCTAssertEqual(checks.first?.url?.lastPathComponent, id)
+        XCTAssertEqual(checks.first?.value(forHTTPHeaderField: "Authorization"), "Bearer test-token")
+        XCTAssertEqual(acceptedWhileChecked, [true, true], "No row spins after the upload")
+    }
+
     func testUploadsGiveUpAfterFiveMinutesSoTheAppDecidesTheRetry() throws {
         let fixture = try DeliveryFixture()
         defer { fixture.cleanUp() }
