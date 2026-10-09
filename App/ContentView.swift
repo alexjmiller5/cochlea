@@ -92,7 +92,9 @@ struct ContentView: View {
                                 CaptureRow(record: record,
                                            isUploading: controller.uploadingIDs.contains(record.id),
                                            connectionIssue: controller.connectionIssue,
-                                           isOnline: controller.isOnline)
+                                           isOnline: controller.isOnline,
+                                           retry: { Task { await controller.retry(record) } },
+                                           delete: { controller.delete(record) })
                                 if record.id != controller.records.first?.id { Divider() }
                             }
                         }
@@ -134,8 +136,31 @@ private struct CaptureRow: View {
     let isUploading: Bool
     let connectionIssue: String?
     let isOnline: Bool
+    let retry: () -> Void
+    let delete: () -> Void
+    @State private var confirmingDelete = false
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            details
+            // A capture Shazam gave up on stays until the user decides; nothing retries it silently.
+            if record.state == .unmatched {
+                HStack(spacing: 20) {
+                    Button("Retry", action: retry)
+                    Button("Delete", role: .destructive) { confirmingDelete = true }
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderless)
+                .confirmationDialog("Delete this capture?", isPresented: $confirmingDelete) {
+                    Button("Delete", role: .destructive, action: delete)
+                } message: {
+                    Text("Its saved recording is removed and cannot be identified later.")
+                }
+            }
+        }
+    }
+
+    private var details: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(record.title ?? "Saved capture").font(.headline)
             if let artist = record.artist { Text(artist).foregroundStyle(.secondary) }

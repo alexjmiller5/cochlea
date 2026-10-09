@@ -41,6 +41,64 @@ final class ControllerTests: XCTestCase {
         }
     }
 
+    func testCaptureLinkStartsOneCaptureAndNeverCancelsARunningOne() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
+            connection: { nil }, sessionConfiguration: .ephemeral)
+        let started = expectation(description: "the first link starts recording")
+        var recordings = 0
+        var release: CheckedContinuation<Void, Never>?
+        let controller = CaptureController(store: store, delivery: service, recordAudio: {
+            recordings += 1
+            started.fulfill()
+            await withCheckedContinuation { release = $0 }
+            let generator = SHSignatureGenerator()
+            try generator.append(streamingFixture(seconds: 4), at: nil)
+            return CapturedAudio(signature: generator.signature())
+        }, recognize: { _ in nil })
+        controller.isOnline = false
+        let first = Task { await controller.startCapture() }
+        await fulfillment(of: [started], timeout: 5)
+        await controller.startCapture()
+        XCTAssertTrue(controller.isRecording, "A repeated link must not cancel the running capture")
+        XCTAssertNil(controller.status)
+        release?.resume()
+        await first.value
+        XCTAssertEqual(recordings, 1)
+        XCTAssertEqual(try store.records().map(\.state), [.pending])
+        XCTAssertEqual(controller.status, "Capture saved.")
+        service.session.finishTasksAndInvalidate()
+    }
+
+    func testRetryIdentifiesAGivenUpCaptureAndDeleteForgetsItsRecording() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
+            connection: { nil }, sessionConfiguration: .ephemeral)
+        let kept = try store.capture(signature: SHSignatureGenerator().signature())
+        let removed = try store.capture(signature: SHSignatureGenerator().signature())
+        for record in [kept, removed] {
+            record.state = .unmatched
+            record.lastError = "Shazam could not identify this recording."
+        }
+        try store.save()
+        let controller = CaptureController(store: store, delivery: service, recordAudio: { throw CaptureError.invalidAudio },
+            recognize: { _ in MatchMetadata(title: "Example Song", artist: "Example Artist") })
+        await controller.retry(kept)
+        XCTAssertEqual(kept.state, .matched)
+        XCTAssertEqual(removed.state, .unmatched, "Retry is per capture")
+        controller.delete(removed)
+        XCTAssertEqual(controller.records.map(\.id), [kept.id])
+        let reopened = try CaptureStore(directory: directory)
+        XCTAssertEqual(try reopened.records().map(\.id), [kept.id])
+        let files = try FileManager.default.contentsOfDirectory(atPath: reopened.signatureDirectory.path)
+        XCTAssertEqual(files, [kept.id.uuidString + ".shazamsignature"])
+        service.session.finishTasksAndInvalidate()
+    }
+
     func testCanceledCaptureKeepsItsAudioAndRetriesAutomaticallyOnNextUse() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

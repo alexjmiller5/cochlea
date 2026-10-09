@@ -6,6 +6,20 @@ import UIKit
 import AppKit
 #endif
 
+/// Links the app handles, under the `cochlea` scheme and the legacy `offlineshazam` one.
+enum DeepLink: Equatable {
+    case enroll, capture
+
+    init?(_ url: URL) {
+        guard ["cochlea", "offlineshazam"].contains(url.scheme?.lowercased() ?? "") else { return nil }
+        switch url.host?.lowercased() {
+        case "enroll": self = .enroll
+        case "capture": self = .capture
+        default: return nil
+        }
+    }
+}
+
 @MainActor
 enum Runtime {
     static let backgroundIdentifier = (Bundle.main.bundleIdentifier ?? "cochlea") + ".delivery"
@@ -40,6 +54,16 @@ enum Runtime {
         controller.onRecordsChanged = { await notifications.reconcile(store: store) }
         delivery.onRecordsChanged = { await notifications.reconcile(store: store) }
         return controller
+    }
+
+    static func open(_ url: URL) {
+        switch DeepLink(url) {
+        case .enroll: enroll(url)
+        case .capture:
+            guard case .success(let controller) = controller else { return }
+            Task { await controller.startCapture() }
+        case nil: break
+        }
     }
 
     /// An enrollment link (`offlineshazam://enroll?url=&token=`, opened from
@@ -112,6 +136,8 @@ final class AppDelegate: NSObject, UNUserNotificationCenterDelegate {
     }
     #else
     func applicationDidFinishLaunching(_ notification: Notification) { start() }
+
+    func application(_ application: NSApplication, open urls: [URL]) { urls.forEach(Runtime.open) }
     #endif
 }
 

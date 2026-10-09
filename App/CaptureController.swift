@@ -47,6 +47,28 @@ final class CaptureController {
         return record
     }
 
+    /// The `cochlea://capture` link: the same capture as the Shortcut, Control and menu-bar
+    /// item. A link arriving while one records leaves it running instead of canceling it.
+    func startCapture() async {
+        do { _ = try await capture() }
+        catch is CancellationError {}
+        catch CaptureError.alreadyRecording {}
+        catch { status = (error as? CaptureError)?.errorDescription ?? "Could not save this capture. Please try again." }
+    }
+
+    func retry(_ record: CaptureRecord) async {
+        do { try store.retry(record) }
+        catch { status = "Could not update this capture. Please try again."; return }
+        refresh()
+        await resume(preferred: record.id)
+    }
+
+    func delete(_ record: CaptureRecord) {
+        do { try store.delete(record) }
+        catch { status = "Could not delete this capture. Please try again." }
+        refresh()
+    }
+
     func cancelCapture(id: UUID? = nil) {
         guard isRecording, id == nil || id == recordingID else { return }
         discardRecording = true

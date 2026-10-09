@@ -83,9 +83,13 @@ final class CaptureStore {
         try context.fetch(FetchDescriptor<CaptureRecord>(sortBy: [SortDescriptor(\.createdAt)]))
     }
 
+    private func signatureURL(_ record: CaptureRecord) -> URL {
+        signatureDirectory.appendingPathComponent(record.id.uuidString + ".shazamsignature")
+    }
+
     func capture(signature: SHSignature) throws -> CaptureRecord {
         let record = CaptureRecord()
-        let url = signatureDirectory.appendingPathComponent(record.id.uuidString + ".shazamsignature")
+        let url = signatureURL(record)
         try signature.dataRepresentation.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         context.insert(record)
         do {
@@ -99,7 +103,26 @@ final class CaptureStore {
     }
 
     func signature(for record: CaptureRecord) throws -> Data {
-        try Data(contentsOf: signatureDirectory.appendingPathComponent(record.id.uuidString + ".shazamsignature"))
+        try Data(contentsOf: signatureURL(record))
+    }
+
+    func replaceSignature(of record: CaptureRecord, with data: Data) throws {
+        try data.write(to: signatureURL(record), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+
+    /// Queue a capture that gave up for another identification attempt.
+    func retry(_ record: CaptureRecord) throws {
+        record.state = .pending
+        record.lastError = nil
+        try save()
+    }
+
+    /// Forget a capture and its saved recording.
+    func delete(_ record: CaptureRecord) throws {
+        let url = signatureURL(record)
+        context.delete(record)
+        try save()
+        try? FileManager.default.removeItem(at: url)
     }
 
     func save() throws {
@@ -194,7 +217,7 @@ final class CaptureStore {
         }
         try save()
         if record.state == .delivered {
-            try? FileManager.default.removeItem(at: signatureDirectory.appendingPathComponent(record.id.uuidString + ".shazamsignature"))
+            try? FileManager.default.removeItem(at: signatureURL(record))
         }
     }
 }

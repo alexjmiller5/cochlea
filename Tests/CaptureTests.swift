@@ -175,6 +175,89 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(calls, 1, "A rejected length must not be retried on every use")
     }
 
+    // Captures saved before the 12-second cap hold ~16 s signatures that Shazam rejects (SHError 201).
+    func testOverlongSavedSignatureIsCutToTwelveSecondsAndIdentified() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (signature, catalog) = try overlongSignatureAndCatalog()
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: signature)
+        let processor = CaptureProcessor(store: store) { try await ShazamMatcher(session: SHSession(catalog: catalog)).match($0) }
+        try await processor.process()
+        XCTAssertEqual(record.state, .matched, record.lastError ?? "")
+        XCTAssertEqual(record.title, "Example Song")
+        XCTAssertEqual(try SHSignature(dataRepresentation: store.signature(for: record)).duration, 12, accuracy: 0.01)
+    }
+
+    func testCaptureRejectedForLengthByAnEarlierVersionIsIdentifiedAfterUpgrade() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let (signature, catalog) = try overlongSignatureAndCatalog()
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: signature)
+        record.state = .unmatched
+        record.lastError = "This recording's length cannot be identified by Shazam."
+        try store.save()
+        let processor = CaptureProcessor(store: store) { try await ShazamMatcher(session: SHSession(catalog: catalog)).match($0) }
+        try await processor.process()
+        XCTAssertEqual(record.state, .matched, record.lastError ?? "")
+    }
+
+    func testDamagedOrMissingSignatureStopsRetryingAndSaysWhy() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let damaged = try store.capture(signature: makeSignature())
+        try Data("not a signature".utf8).write(to: store.signatureDirectory.appendingPathComponent(damaged.id.uuidString + ".shazamsignature"))
+        let missing = try store.capture(signature: makeSignature())
+        try FileManager.default.removeItem(at: store.signatureDirectory.appendingPathComponent(missing.id.uuidString + ".shazamsignature"))
+        var calls = 0
+        // ShazamKit's own SHError 200 for unreadable data. Raised here rather than through
+        // ShazamMatcher: XCTest's error observation aborts the test host when an async
+        // method throws before its first suspension.
+        let processor = CaptureProcessor(store: store) {
+            calls += 1
+            _ = try SHSignature(dataRepresentation: $0)
+            return nil
+        }
+        try await processor.process()
+        for record in [damaged, missing] {
+            XCTAssertEqual(record.state, .unmatched, "A capture Shazam can never read must not stay pending")
+            XCTAssertTrue(record.lastError?.contains("can't identify") == true, record.lastError ?? "")
+        }
+        try await processor.process()
+        XCTAssertEqual(calls, 1, "Only the damaged file reaches Shazam, and only once")
+        let reopened = try CaptureStore(directory: directory)
+        XCTAssertEqual(try reopened.records().map(\.state), [.unmatched, .unmatched])
+    }
+
+    func testTransientShazamFailuresKeepTheCaptureForAnotherAttempt() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        for error: Error in [NSError(domain: SHErrorDomain, code: SHError.Code.matchAttemptFailed.rawValue), URLError(.timedOut),
+                             CocoaError(.fileReadNoPermission)] {
+            try await CaptureProcessor(store: store) { _ in throw error }.process()
+            XCTAssertEqual(record.state, .pending, "\(error)")
+        }
+    }
+
+    func testTrimOnlyShortensOverlongShazamSignatures() throws {
+        let (signature, _) = try overlongSignatureAndCatalog()
+        let trimmed = try XCTUnwrap(CatalogLimits.trimmed(signature.dataRepresentation))
+        XCTAssertEqual(try SHSignature(dataRepresentation: trimmed).duration, 12, accuracy: 0.01)
+        XCTAssertLessThan(trimmed.count, signature.dataRepresentation.count)
+        XCTAssertNil(CatalogLimits.trimmed(trimmed), "A signature that fits is left as it is")
+        XCTAssertNil(CatalogLimits.trimmed(try makeSignature().dataRepresentation))
+        var damaged = signature.dataRepresentation
+        damaged[100] ^= 0xff
+        XCTAssertNil(CatalogLimits.trimmed(damaged), "A checksum mismatch is not rewritten")
+        for data in [Data(), Data("not a signature".utf8), signature.dataRepresentation.prefix(200)] {
+            XCTAssertNil(CatalogLimits.trimmed(data))
+        }
+    }
+
     func testDeliveryRequiresMatchingBodyAcknowledgementAndPreservesMetadataForRetry() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -223,6 +306,22 @@ final class CaptureTests: XCTestCase {
         try store.deliveryFinished(record, status: 200, data: Data("{\"ok\":true,\"capture_id\":\"\(record.id)\",\"isrc\":\"XX0000000002\"}".utf8))
         XCTAssertEqual(record.state, .matched, "A different recording is not a successful delivery")
         XCTAssertFalse(try store.signature(for: record).isEmpty)
+    }
+
+    private func overlongSignatureAndCatalog() throws -> (SHSignature, SHCustomCatalog) {
+        let generator = SHSignatureGenerator()
+        try generator.append(streamingFixture(seconds: 16), at: nil)
+        let signature = generator.signature()
+        let catalog = SHCustomCatalog()
+        try catalog.addReferenceSignature(signature, representing: [SHMediaItem(properties: [.title: "Example Song", .artist: "Example Artist"])])
+        try catalog.addReferenceSignature(unrelatedSignature(), representing: [SHMediaItem(properties: [.title: "Other Song", .artist: "Example Artist"])])
+        return (signature, catalog)
+    }
+
+    private func unrelatedSignature() throws -> SHSignature {
+        let generator = SHSignatureGenerator()
+        try generator.append(streamingFixture(seconds: 16, seed: 54321), at: nil)
+        return generator.signature()
     }
 
     private func makeSignature() throws -> SHSignature {

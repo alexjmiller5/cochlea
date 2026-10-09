@@ -12,7 +12,8 @@ struct CochleaApp: App {
         #if os(iOS)
         mainWindow
         #else
-        mainWindow.defaultSize(width: 440, height: 720)
+        // Links go to the app delegate; by default SwiftUI opens another window for each one.
+        mainWindow.defaultSize(width: 440, height: 720).handlesExternalEvents(matching: [])
         MenuBarExtra("Cochlea", systemImage: "waveform") {
             if case .success(let controller) = Runtime.controller { MenuBarView(controller: controller) }
             else { Text("Captures unavailable") }
@@ -30,7 +31,9 @@ struct CochleaApp: App {
                                            description: Text("Unlock your \(Runtime.deviceName) and reopen the app. Existing captures have not been removed."))
                 }
             }
-            .onOpenURL { Runtime.enroll($0) }
+            #if os(iOS)
+            .onOpenURL { Runtime.open($0) }
+            #endif
         }
     }
 }

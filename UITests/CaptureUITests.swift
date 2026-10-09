@@ -29,6 +29,26 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(capture.waitForExistence(timeout: 3))
     }
 
+    func testCaptureLinkStartsCaptureAndARepeatedLinkLeavesItRunning() throws {
+        let app = XCUIApplication()
+        app.launch()
+        allowSystemPrompts()
+        XCTAssertTrue(app.buttons["Capture song"].waitForExistence(timeout: 5))
+        app.open(URL(string: "cochlea://capture")!)
+        allowSystemPrompts()
+        if app.staticTexts["No microphone is available to record."].waitForExistence(timeout: 3) {
+            attach(app, "Capture link - started, no audio input on this host")
+            throw XCTSkip("This host has no audio input, so the simulator cannot record")
+        }
+        let cancel = app.buttons["Cancel capture"]
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        app.open(URL(string: "offlineshazam://capture")!)
+        XCTAssertTrue(cancel.waitForExistence(timeout: 2), "A repeated link leaves the capture running")
+        attach(app, "Capture link - recording")
+        cancel.tap()
+        XCTAssertTrue(app.buttons["Capture song"].waitForExistence(timeout: 3))
+    }
+
     /// Answers the notification and microphone permission alerts, whichever are showing.
     private func allowSystemPrompts() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")

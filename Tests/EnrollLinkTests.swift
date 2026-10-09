@@ -21,6 +21,16 @@ final class EnrollLinkTests: XCTestCase {
         XCTAssertNil(try DeliveryConfiguration.fromEnrollLink(URL(string: "https://example.com/enroll?url=x&token=y")!))
     }
 
+    func testLinksRouteByHostForBothSchemes() {
+        XCTAssertEqual(DeepLink(URL(string: "cochlea://capture")!), .capture)
+        XCTAssertEqual(DeepLink(URL(string: "offlineshazam://capture")!), .capture)
+        XCTAssertEqual(DeepLink(URL(string: "Cochlea://Capture")!), .capture)
+        XCTAssertEqual(DeepLink(URL(string: "cochlea://enroll?url=x&token=y")!), .enroll)
+        XCTAssertEqual(DeepLink(URL(string: "offlineshazam://enroll?url=x&token=y")!), .enroll)
+        XCTAssertNil(DeepLink(URL(string: "cochlea://settings")!))
+        XCTAssertNil(DeepLink(URL(string: "https://example.com/capture")!))
+    }
+
     func testIncompleteOrUnsafeEnrollLinksAreRefused() {
         for query in ["url=https%3A%2F%2Fws.modal.run", "url=http%3A%2F%2Fws.modal.run&token=abc", "token=abc",
                       "url=https%3A%2F%2Fws.modal.run&token=a%20b"] {
