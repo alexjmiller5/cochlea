@@ -16,6 +16,33 @@ final class RecordingTests: XCTestCase {
         XCTAssertEqual(audio.signature.duration, 4, accuracy: 0.1)
     }
 
+    func testRecordingKeepsTheWholeCapturedAudioBesideTheSignature() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let recorder = AudioRecorder()
+        let stream = StreamingAudio(session: try unrelatedStreamingSession(), recordingURL: url)
+        let audio = try await recorder.capture(using: stream, start: {
+            try stream.append(streamingFixture(seconds: 8), at: nil)
+            try stream.append(streamingFixture(seconds: 6, seed: 777), at: nil)
+        }, stop: {}, timeout: .milliseconds(30))
+        XCTAssertEqual(audio.signature.duration, CatalogLimits.maximumSeconds, accuracy: 0.1)
+        XCTAssertEqual(audio.recording, url)
+        let file = try AVAudioFile(forReading: url)
+        XCTAssertEqual(Double(file.length) / file.fileFormat.sampleRate, 14, accuracy: 0.2, "The recording is not cut to the signature")
+    }
+
+    func testTooShortRecordingLeavesNoAudioFileBehind() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+        let recorder = AudioRecorder()
+        let stream = StreamingAudio(session: try unrelatedStreamingSession(), recordingURL: url)
+        do {
+            _ = try await recorder.capture(using: stream, start: { try stream.append(streamingFixture(seconds: 2), at: nil) },
+                                           stop: {}, timeout: .milliseconds(30))
+            XCTFail("Two seconds is not a capture")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path))
+    }
+
     func testSavedSignatureStopsAtTheCatalogMaximumWhileStreamingContinues() async throws {
         let recorder = AudioRecorder()
         let stream = StreamingAudio(session: try unrelatedStreamingSession())

@@ -181,6 +181,46 @@ final class DeliveryTests: XCTestCase {
         await fulfillment(of: [uploaded], timeout: 2)
     }
 
+    func testStaleRestoredUploadIsReplacedInsteadOfSendingForever() async throws {
+        // A background upload the service never answers stays "running" for the
+        // session's resource timeout (7 days by default) while iOS resends it.
+        var restored: URLSessionTask?
+        let fixture = try DeliveryFixture(existingTasks: { restored.map { [$0] } ?? [] })
+        defer { fixture.cleanUp() }
+        var request = URLRequest(url: URL(string: "https://example.com/capture")!)
+        request.setValue("Bearer test-token", forHTTPHeaderField: "Authorization")
+        let restoredStarted = expectation(description: "restored transfer is waiting for an answer")
+        CaptureHTTPStub.begin = { _ in restoredStarted.fulfill() } // and never gets one
+        restored = fixture.service.session.dataTask(with: request)
+        restored?.taskDescription = fixture.record.id.uuidString
+        restored?.resume()
+        await fulfillment(of: [restoredStarted], timeout: 5)
+        fixture.record.deliveryStartedAt = Date(timeIntervalSinceNow: -DeliveryService.uploadTimeout - 120)
+        let replaced = expectation(description: "a fresh upload replaces the stale one")
+        var requests = 0
+        CaptureHTTPStub.begin = nil
+        CaptureHTTPStub.response = { _ in
+            requests += 1
+            replaced.fulfill()
+            return (503, ["Retry-After": "72000"], Data("{\"ok\":false,\"capture_id\":\"\(fixture.record.id)\"}".utf8))
+        }
+        try await fixture.service.enqueue()
+        await fulfillment(of: [replaced], timeout: 5)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            fixture.record.deliveryStatus == .spotifyBusy && fixture.service.uploadingIDs.isEmpty
+        }, object: nil)
+        await fulfillment(of: [settled], timeout: 5)
+        XCTAssertEqual(restored?.state, .completed, "The stale transfer is cancelled")
+        XCTAssertEqual(requests, 1)
+    }
+
+    func testUploadsGiveUpAfterFiveMinutesSoTheAppDecidesTheRetry() throws {
+        let fixture = try DeliveryFixture()
+        defer { fixture.cleanUp() }
+        XCTAssertEqual(DeliveryService.uploadTimeout, 300)
+        XCTAssertEqual(fixture.service.session.configuration.timeoutIntervalForResource, 300)
+    }
+
     func testOtherRetryDeadlinesContinueWhileAnEarlierUploadIsHeld() async throws {
         let fixture = try DeliveryFixture()
         defer { fixture.cleanUp() }

@@ -49,6 +49,22 @@ final class CaptureUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Capture song"].waitForExistence(timeout: 3))
     }
 
+    func testSettingsExportsEveryCaptureThroughTheShareSheet() {
+        let app = XCUIApplication()
+        app.launch()
+        allowSystemPrompts()
+        app.buttons["Settings"].tap()
+        let export = app.buttons["Export captures"]
+        XCTAssertTrue(export.waitForExistence(timeout: 5))
+        attach(app, "Settings - export captures")
+        export.tap()
+        let shareSheet = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.otherElements["ActivityListView"].exists || app.buttons["Save to Files"].exists || app.cells["Save to Files"].exists
+        }, object: nil)
+        wait(for: [shareSheet], timeout: 15)
+        attach(app, "Export captures - share sheet")
+    }
+
     /// Answers the notification and microphone permission alerts, whichever are showing.
     private func allowSystemPrompts() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")

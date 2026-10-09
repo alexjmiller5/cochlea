@@ -72,30 +72,37 @@ final class ControllerTests: XCTestCase {
         service.session.finishTasksAndInvalidate()
     }
 
-    func testRetryIdentifiesAGivenUpCaptureAndDeleteForgetsItsRecording() async throws {
+    func testSavedCaptureKeepsItsRecordingAndExplicitCancelDiscardsIt() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CaptureStore(directory: directory)
         let service = DeliveryService(store: store, uploadDirectory: directory.appendingPathComponent("uploads"),
             connection: { nil }, sessionConfiguration: .ephemeral)
-        let kept = try store.capture(signature: SHSignatureGenerator().signature())
-        let removed = try store.capture(signature: SHSignatureGenerator().signature())
-        for record in [kept, removed] {
-            record.state = .unmatched
-            record.lastError = "Shazam could not identify this recording."
-        }
-        try store.save()
-        let controller = CaptureController(store: store, delivery: service, recordAudio: { throw CaptureError.invalidAudio },
-            recognize: { _ in MatchMetadata(title: "Example Song", artist: "Example Artist") })
-        await controller.retry(kept)
-        XCTAssertEqual(kept.state, .matched)
-        XCTAssertEqual(removed.state, .unmatched, "Retry is per capture")
-        controller.delete(removed)
-        XCTAssertEqual(controller.records.map(\.id), [kept.id])
-        let reopened = try CaptureStore(directory: directory)
-        XCTAssertEqual(try reopened.records().map(\.id), [kept.id])
-        let files = try FileManager.default.contentsOfDirectory(atPath: reopened.signatureDirectory.path)
-        XCTAssertEqual(files, [kept.id.uuidString + ".shazamsignature"])
+        let recorder = AudioRecorder()
+        var clips: [URL] = []
+        var cancelNext = false
+        let started = expectation(description: "second recording started")
+        let controller = CaptureController(store: store, delivery: service, recordAudio: {
+            let clip = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+            clips.append(clip)
+            let stream = StreamingAudio(session: try unrelatedStreamingSession(), recordingURL: clip)
+            return try await recorder.capture(using: stream, start: {
+                try stream.append(streamingFixture(seconds: 4), at: nil)
+                if cancelNext { started.fulfill() }
+            }, stop: {}, timeout: cancelNext ? .seconds(15) : .milliseconds(30))
+        }, recognize: { _ in nil })
+        controller.isOnline = false
+        let record = try await controller.capture()
+        let kept = try XCTUnwrap(store.recording(for: record))
+        XCTAssertGreaterThan(try AVAudioFile(forReading: kept).length, 0)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clips[0].path), "The temporary clip moved into the store")
+        cancelNext = true
+        let second = Task { @MainActor in _ = try await controller.capture() }
+        await fulfillment(of: [started], timeout: 10)
+        controller.cancelCapture()
+        _ = try? await second.value
+        XCTAssertEqual(try store.records().count, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clips[1].path), "A canceled recording is discarded")
         service.session.finishTasksAndInvalidate()
     }
 

@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 final class DeliveryService: NSObject, URLSessionDataDelegate {
+    /// A background upload the service never answers is otherwise resent by iOS for
+    /// days while the app can only show it as sending; after this it fails and the
+    /// queue's own Retry-After and backoff decide the next attempt.
+    static let uploadTimeout: TimeInterval = 300
     let store: CaptureStore
     let uploadDirectory: URL
     let connection: () throws -> DeliveryConfiguration?
@@ -33,6 +37,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
         self.store = store
         self.uploadDirectory = uploadDirectory
         self.connection = connection
+        sessionConfiguration.timeoutIntervalForResource = Self.uploadTimeout
         self.sessionConfiguration = sessionConfiguration
         self.retryDelay = max(0.01, retryDelay)
         self.existingTasks = existingTasks
@@ -69,15 +74,24 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                 connectionIssue = "Connect Music Sync in Settings to add songs to Spotify."
                 return
             }
+            let records = try store.records().filter { $0.state == .matched }
+            let started = Dictionary(records.map { ($0.id, $0.deliveryStartedAt) }, uniquingKeysWith: { first, _ in first })
             // URLSession may omit a finished transfer before its completion
             // callback persists the receipt. Keep our IDs until that callback;
-            // adopt restored tasks only for the active connection.
-            uploadingIDs.formUnion(tasks.filter {
-                $0.state != .completed && !supersededTaskIDs.contains($0.taskIdentifier) &&
-                $0.originalRequest?.url == configuration.endpoint &&
-                $0.originalRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer " + configuration.token
-            }.compactMap { $0.taskDescription.flatMap(UUID.init(uuidString:)) })
-            let records = try store.records().filter { $0.state == .matched }
+            // adopt restored tasks only for the active connection, and replace
+            // ones older than the upload timeout (earlier builds had none).
+            for task in tasks where task.state != .completed && !supersededTaskIDs.contains(task.taskIdentifier) &&
+                    task.originalRequest?.url == configuration.endpoint &&
+                    task.originalRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer " + configuration.token {
+                guard let id = task.taskDescription.flatMap(UUID.init(uuidString:)) else { continue }
+                if uploadingIDs.contains(id) { continue }
+                if let begun = started[id] ?? nil, Date().timeIntervalSince(begun) < Self.uploadTimeout + 60 {
+                    uploadingIDs.insert(id)
+                } else {
+                    supersededTaskIDs.insert(task.taskIdentifier)
+                    task.cancel()
+                }
+            }
             guard !records.contains(where: \.deliveryBlocked) else {
                 connectionIssue = ConnectionCheckError.rejected.localizedDescription
                 return

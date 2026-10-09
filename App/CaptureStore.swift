@@ -10,6 +10,11 @@ enum SpotifyOutcome: String {
     case added, notAdded = "not_added", unknown
 }
 
+/// Why the last delivery attempt did not confirm the song, as the capture list shows it.
+enum DeliveryStatus: String {
+    case spotifyBusy = "spotify_busy", notOnSpotify = "not_on_spotify", retrying
+}
+
 @Model
 final class CaptureRecord {
     @Attribute(.unique) var id: UUID
@@ -30,6 +35,14 @@ final class CaptureRecord {
     var deliveryNotificationScheduled: Bool = false
     var spotifyOutcomeValue: String?
     var spotifyFailureNotificationDate: Date?
+    var deliveryStatusValue: String?
+    var failedDeliveries: Int = 0
+    var deliveryStartedAt: Date?
+
+    var deliveryStatus: DeliveryStatus? {
+        get { deliveryStatusValue.flatMap(DeliveryStatus.init(rawValue:)) }
+        set { deliveryStatusValue = newValue?.rawValue }
+    }
 
     var spotifyOutcome: SpotifyOutcome? {
         get { spotifyOutcomeValue.flatMap(SpotifyOutcome.init(rawValue:)) }
@@ -58,6 +71,7 @@ final class CaptureStore {
     let container: ModelContainer
     let context: ModelContext
     let signatureDirectory: URL
+    let recordingDirectory: URL
 
     static func applicationDirectory(in root: URL) throws -> URL {
         let destination = root.appendingPathComponent("cochlea", isDirectory: true)
@@ -73,7 +87,9 @@ final class CaptureStore {
 
     init(directory: URL) throws {
         signatureDirectory = directory.appendingPathComponent("signatures", isDirectory: true)
+        recordingDirectory = directory.appendingPathComponent("recordings", isDirectory: true)
         try FileManager.default.createDirectory(at: signatureDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: recordingDirectory, withIntermediateDirectories: true)
         container = try ModelContainer(for: CaptureRecord.self, configurations: ModelConfiguration(url: directory.appendingPathComponent("queue.sqlite")))
         context = ModelContext(container)
         context.autosaveEnabled = false
@@ -87,7 +103,8 @@ final class CaptureStore {
         signatureDirectory.appendingPathComponent(record.id.uuidString + ".shazamsignature")
     }
 
-    func capture(signature: SHSignature) throws -> CaptureRecord {
+    /// Saves a capture; a `recording` file is moved into the store and kept for export.
+    func capture(signature: SHSignature, recording: URL? = nil) throws -> CaptureRecord {
         let record = CaptureRecord()
         let url = signatureURL(record)
         try signature.dataRepresentation.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
@@ -99,7 +116,20 @@ final class CaptureStore {
             try? FileManager.default.removeItem(at: url)
             throw error
         }
+        if let recording {
+            let destination = recordingDirectory.appendingPathComponent(record.id.uuidString)
+                .appendingPathExtension(recording.pathExtension.isEmpty ? "m4a" : recording.pathExtension)
+            // The capture is already durable; a recording that cannot be kept is dropped, not fatal.
+            if (try? FileManager.default.moveItem(at: recording, to: destination)) == nil {
+                try? FileManager.default.removeItem(at: recording)
+            }
+        }
         return record
+    }
+
+    func recording(for record: CaptureRecord) -> URL? {
+        let files = (try? FileManager.default.contentsOfDirectory(at: recordingDirectory, includingPropertiesForKeys: nil)) ?? []
+        return files.first { $0.deletingPathExtension().lastPathComponent == record.id.uuidString }
     }
 
     func signature(for record: CaptureRecord) throws -> Data {
@@ -108,21 +138,6 @@ final class CaptureStore {
 
     func replaceSignature(of record: CaptureRecord, with data: Data) throws {
         try data.write(to: signatureURL(record), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-    }
-
-    /// Queue a capture that gave up for another identification attempt.
-    func retry(_ record: CaptureRecord) throws {
-        record.state = .pending
-        record.lastError = nil
-        try save()
-    }
-
-    /// Forget a capture and its saved recording.
-    func delete(_ record: CaptureRecord) throws {
-        let url = signatureURL(record)
-        context.delete(record)
-        try save()
-        try? FileManager.default.removeItem(at: url)
     }
 
     func save() throws {
@@ -152,10 +167,20 @@ final class CaptureStore {
     func deliveryStarted(_ record: CaptureRecord) throws {
         // A new request may reach Spotify. A previous pre-mutation failure no
         // longer proves the current outcome, even if this process is terminated.
-        if record.spotifyOutcome == .notAdded {
-            record.spotifyOutcome = nil
-            try save()
-        }
+        if record.spotifyOutcome == .notAdded { record.spotifyOutcome = nil }
+        record.deliveryStartedAt = Date()
+        try save()
+    }
+
+    /// Seconds a numeric or HTTP-date Retry-After asks for; nil when absent or unusable.
+    private static func retryAfterDelay(_ value: String?, now: Date) -> TimeInterval? {
+        guard let value else { return nil }
+        if let seconds = Double(value) { return seconds.isFinite && seconds >= 0 ? seconds : nil }
+        let format = DateFormatter()
+        format.locale = Locale(identifier: "en_US_POSIX")
+        format.timeZone = TimeZone(secondsFromGMT: 0)
+        format.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
+        return format.date(from: value).map { max(0, $0.timeIntervalSince(now)) }
     }
 
     func deliveryFinished(_ record: CaptureRecord, status: Int, data: Data, retryAfter: String? = nil,
@@ -165,6 +190,7 @@ final class CaptureStore {
             let ok: Bool
             let capture_id: UUID?
             let isrc: String?
+            let reason: String?
         }
         struct OutcomeReceipt: Decodable {
             let spotify_outcome: String?
@@ -194,30 +220,65 @@ final class CaptureStore {
             record.lastError = nil
             record.nextAttemptAt = nil
             record.deliveryBlocked = false
+            record.deliveryStatus = nil
+            record.failedDeliveries = 0
+            record.deliveryStartedAt = nil
         } else {
             record.deliveryBlocked = status == 401 || status == 403
-            record.lastError = record.deliveryBlocked
-                ? "Connection needs attention in Settings."
-                : "Delivery not confirmed. Saved for another attempt."
-            record.nextAttemptAt = now.addingTimeInterval(retryDelay)
-            if let retryAfter {
-                if let seconds = Double(retryAfter), seconds.isFinite, seconds >= 0 {
-                    record.nextAttemptAt = now.addingTimeInterval(max(retryDelay, seconds))
-                } else {
-                    let format = DateFormatter()
-                    format.locale = Locale(identifier: "en_US_POSIX")
-                    format.timeZone = TimeZone(secondsFromGMT: 0)
-                    format.dateFormat = "EEE, dd MMM yyyy HH:mm:ss z"
-                    if let date = format.date(from: retryAfter) {
-                        record.nextAttemptAt = max(now.addingTimeInterval(retryDelay), date)
-                    }
-                }
+            record.deliveryStartedAt = nil
+            let serverDelay = Self.retryAfterDelay(retryAfter, now: now)
+            if record.deliveryBlocked {
+                record.deliveryStatus = nil
+                record.lastError = "Connection needs attention in Settings."
+                record.nextAttemptAt = nil
+            } else if trustedReceipt, receipt?.reason == "no_match" {
+                // Definitive until Spotify's catalog changes: check once a day.
+                record.deliveryStatus = .notOnSpotify
+                record.lastError = "Spotify has no exact match for this recording yet."
+                record.nextAttemptAt = now.addingTimeInterval(max(86400, serverDelay ?? 0))
+            } else if status == 503 || status == 429, let serverDelay {
+                record.deliveryStatus = .spotifyBusy
+                record.lastError = "Spotify is limiting requests from Music Sync."
+                record.nextAttemptAt = now.addingTimeInterval(max(retryDelay, serverDelay))
+            } else {
+                // Without a server deadline, back off exponentially up to an hour.
+                let backoff = min(3600, retryDelay * pow(2, Double(min(record.failedDeliveries, 16))))
+                record.deliveryStatus = .retrying
+                record.lastError = "Delivery not confirmed. Saved for another attempt."
+                record.nextAttemptAt = now.addingTimeInterval(max(backoff, serverDelay ?? 0))
             }
-            if record.deliveryBlocked { record.nextAttemptAt = nil }
+            record.failedDeliveries += 1
         }
         try save()
         if record.state == .delivered {
             try? FileManager.default.removeItem(at: signatureURL(record))
         }
+    }
+}
+
+extension CaptureRecord {
+    /// The capture list's status for this capture: what delivery is actually doing, never an open-ended spinner.
+    func deliveryLabel(isUploading: Bool, isOnline: Bool, connectionIssue: String?, now: Date = Date()) -> String {
+        switch state {
+        case .pending: return "Saved for identification"
+        case .delivered: return "Added to Spotify"
+        case .unmatched: return "Not identified"
+        case .matched:
+            if !isOnline { return "Waiting for internet" }
+            if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
+            if isUploading { return "Sending to Spotify…" }
+            guard let next = nextAttemptAt else { return "Queued for Spotify" }
+            switch deliveryStatus {
+            case .notOnSpotify: return "Not on Spotify yet, checking daily"
+            case .spotifyBusy: return "Spotify busy, retrying at " + Self.retryTime(next, now: now)
+            case .retrying, nil: return "Retrying at " + Self.retryTime(next, now: now)
+            }
+        }
+    }
+
+    static func retryTime(_ date: Date, now: Date = Date()) -> String {
+        Calendar.current.isDate(date, inSameDayAs: now)
+            ? date.formatted(date: .omitted, time: .shortened)
+            : date.formatted(.dateTime.month(.abbreviated).day().hour().minute())
     }
 }

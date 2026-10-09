@@ -92,9 +92,7 @@ struct ContentView: View {
                                 CaptureRow(record: record,
                                            isUploading: controller.uploadingIDs.contains(record.id),
                                            connectionIssue: controller.connectionIssue,
-                                           isOnline: controller.isOnline,
-                                           retry: { Task { await controller.retry(record) } },
-                                           delete: { controller.delete(record) })
+                                           isOnline: controller.isOnline)
                                 if record.id != controller.records.first?.id { Divider() }
                             }
                         }
@@ -136,38 +134,14 @@ private struct CaptureRow: View {
     let isUploading: Bool
     let connectionIssue: String?
     let isOnline: Bool
-    let retry: () -> Void
-    let delete: () -> Void
-    @State private var confirmingDelete = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            details
-            // A capture Shazam gave up on stays until the user decides; nothing retries it silently.
-            if record.state == .unmatched {
-                HStack(spacing: 20) {
-                    Button("Retry", action: retry)
-                    // macOS draws a borderless destructive button in the accent color.
-                    Button("Delete", role: .destructive) { confirmingDelete = true }.foregroundStyle(.red)
-                }
-                .font(.caption.weight(.semibold))
-                .buttonStyle(.borderless)
-                .confirmationDialog("Delete this capture?", isPresented: $confirmingDelete) {
-                    Button("Delete", role: .destructive, action: delete)
-                } message: {
-                    Text("Its saved recording is removed and cannot be identified later.")
-                }
-            }
-        }
-    }
-
-    private var details: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(record.title ?? "Saved capture").font(.headline)
             if let artist = record.artist { Text(artist).foregroundStyle(.secondary) }
             HStack {
                 HStack(spacing: 6) {
-                    if record.state == .matched, isUploading, connectionIssue == nil {
+                    if record.state == .matched, isUploading, isOnline, connectionIssue == nil, !record.deliveryBlocked {
                         ProgressView().controlSize(.mini).tint(color)
                     } else {
                         Image(icon).resizable().frame(width: 16, height: 16)
@@ -190,29 +164,22 @@ private struct CaptureRow: View {
     }
 
     private var label: String {
-        switch record.state {
-        case .pending: return "Saved for identification"
-        case .matched:
-            if !isOnline { return "Waiting for internet" }
-            if connectionIssue != nil { return "Check Music Sync" }
-            if isUploading { return isOnline ? "Sending to Spotify…" : "Waiting for internet" }
-            return record.nextAttemptAt == nil ? "Queued for Spotify" : "Will retry automatically"
-        case .delivered: return "Added to Spotify"
-        case .unmatched: return "Not identified"
-        }
+        record.deliveryLabel(isUploading: isUploading, isOnline: isOnline, connectionIssue: connectionIssue)
+    }
+
+    private var needsAttention: Bool {
+        record.state == .matched && (record.deliveryBlocked || connectionIssue != nil || record.deliveryStatus == .notOnSpotify)
     }
 
     private var color: Color {
         if record.state == .delivered { return .green }
-        if record.state == .matched {
-            return connectionIssue == nil ? .blue : .orange
-        }
-        return .secondary
+        if needsAttention { return .orange }
+        return record.state == .matched ? .blue : .secondary
     }
 
     private var icon: String {
         if record.state == .delivered { return "CircleCheck" }
-        if record.state == .unmatched || (record.state == .matched && connectionIssue != nil) { return "AlertCircle" }
+        if record.state == .unmatched || needsAttention { return "AlertCircle" }
         return "Clock"
     }
 }
@@ -246,6 +213,13 @@ private struct SettingsView: View {
                     Text(connection == nil
                          ? "Open the enrollment link from Music Sync on this \(Runtime.deviceName) to connect. Songs are kept and sent once connected."
                          : "This \(Runtime.deviceName)'s connection came from its enrollment link and is stored securely on it.")
+                }
+                Section {
+                    ShareLink(item: CaptureExport(), preview: SharePreview("Cochlea captures", image: Image("Waveform"))) {
+                        Label { Text("Export captures") } icon: { Image("Share").resizable().frame(width: 18, height: 18) }
+                    }
+                } header: { Text("Your recordings") } footer: {
+                    Text("One archive with every capture's recording, Shazam signature and song details.")
                 }
                 Section("Offline captures") {
                     Text("When online, Shazam listens and identifies the song as soon as it can. Offline captures are saved for your next online use. Once identified, delivery can continue in the background.")

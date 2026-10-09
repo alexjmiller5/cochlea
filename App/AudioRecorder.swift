@@ -4,6 +4,8 @@ import ShazamKit
 struct CapturedAudio {
     let signature: SHSignature
     var metadata: MatchMetadata? = nil
+    /// The whole recording as AAC, kept with the capture so it can be exported.
+    var recording: URL? = nil
 }
 
 // The audio tap and Shazam callbacks run outside the main actor. The lock also
@@ -16,11 +18,27 @@ final class StreamingAudio: NSObject, SHSessionDelegate, @unchecked Sendable {
     private var generatedSeconds = 0.0
     private var metadata: MatchMetadata?
     private var onMatch: (() -> Void)?
+    private let recordingURL: URL?
+    private var recording: AVAudioFile?
 
-    init(session: SHSession = SHSession()) {
+    init(session: SHSession = SHSession(), recordingURL: URL? = nil) {
         self.session = session
+        self.recordingURL = recordingURL
         super.init()
         session.delegate = self
+    }
+
+    // Best effort: a recording that cannot be written never costs the capture.
+    private func record(_ buffer: AVAudioPCMBuffer) {
+        guard let recordingURL else { return }
+        if recording == nil {
+            let format = buffer.format
+            recording = try? AVAudioFile(forWriting: recordingURL, settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: format.sampleRate,
+                AVNumberOfChannelsKey: format.channelCount, AVEncoderBitRateKey: 96_000,
+            ], commonFormat: format.commonFormat, interleaved: format.isInterleaved)
+        }
+        try? recording?.write(from: buffer)
     }
 
     func start(onMatch: @escaping () -> Void) {
@@ -32,6 +50,7 @@ final class StreamingAudio: NSObject, SHSessionDelegate, @unchecked Sendable {
     func append(_ buffer: AVAudioPCMBuffer, at time: AVAudioTime?) throws {
         lock.lock()
         guard active else { lock.unlock(); return }
+        record(buffer)
         // The saved signature stops at the catalog maximum; streaming keeps the whole buffer.
         let original = buffer.frameLength
         let rate = buffer.format.sampleRate
@@ -52,7 +71,10 @@ final class StreamingAudio: NSObject, SHSessionDelegate, @unchecked Sendable {
         lock.lock()
         active = false
         onMatch = nil
-        let audio = CapturedAudio(signature: generator.signature(), metadata: metadata)
+        let written = recording != nil
+        recording = nil // closes the file
+        let audio = CapturedAudio(signature: generator.signature(), metadata: metadata,
+                                  recording: written ? recordingURL : nil)
         lock.unlock()
         session.delegate = nil
         return audio
@@ -101,7 +123,8 @@ final class AudioRecorder {
         let format = input.outputFormat(forBus: 0)
         guard format.channelCount > 0, format.sampleRate > 0 else { throw CaptureError.microphoneUnavailable }
         guard [48000, 44100, 32000, 16000].contains(format.sampleRate) else { throw CaptureError.invalidAudio }
-        let stream = StreamingAudio()
+        let stream = StreamingAudio(recordingURL: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString + ".m4a"))
         var installedTap = false
         return try await capture(using: stream, start: {
             guard let id = self.recordingID else { throw CaptureError.recordingInterrupted }
@@ -175,6 +198,9 @@ final class AudioRecorder {
         deadline = nil
         let audio = stream.finish()
         if audio.signature.duration >= CatalogLimits.minimumSeconds { continuation.resume(returning: audio) }
-        else { continuation.resume(throwing: error ?? CaptureError.invalidAudio) }
+        else {
+            audio.recording.map { try? FileManager.default.removeItem(at: $0) }
+            continuation.resume(throwing: error ?? CaptureError.invalidAudio)
+        }
     }
 }

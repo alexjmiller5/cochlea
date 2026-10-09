@@ -56,19 +56,6 @@ final class CaptureController {
         catch { status = (error as? CaptureError)?.errorDescription ?? "Could not save this capture. Please try again." }
     }
 
-    func retry(_ record: CaptureRecord) async {
-        do { try store.retry(record) }
-        catch { status = "Could not update this capture. Please try again."; return }
-        refresh()
-        await resume(preferred: record.id)
-    }
-
-    func delete(_ record: CaptureRecord) {
-        do { try store.delete(record) }
-        catch { status = "Could not delete this capture. Please try again." }
-        refresh()
-    }
-
     func cancelCapture(id: UUID? = nil) {
         guard isRecording, id == nil || id == recordingID else { return }
         discardRecording = true
@@ -106,17 +93,19 @@ final class CaptureController {
         // OS/lifetime cancellation may preserve useful audio. Only the user's
         // explicit cancel action discards it before anything reaches the queue.
         guard !discardRecording else {
+            audio.recording.map { try? FileManager.default.removeItem(at: $0) }
             await recordingActivity?.end()
             throw CancellationError()
         }
         do {
-            let record = try store.capture(signature: audio.signature)
+            let record = try store.capture(signature: audio.signature, recording: audio.recording)
             if let metadata = audio.metadata { try store.matched(record, metadata: metadata) }
             // Shown only once the capture is durable, so "saved" is never a promise.
             await recordingActivity?.finish(showing: audio.metadata.map { .recognized(title: $0.title, artist: $0.artist) }
                                             ?? (isOnline ? .noMatch : .savedForLater))
             return record
         } catch {
+            audio.recording.map { try? FileManager.default.removeItem(at: $0) }
             await recordingActivity?.end()
             throw error
         }
@@ -124,7 +113,13 @@ final class CaptureController {
 
     func importAudio(_ url: URL) async throws -> CaptureRecord {
         let signature = try await AudioCapture.signature(from: url)
-        let record = try store.capture(signature: signature)
+        // The caller owns the imported file; the store keeps its own copy.
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension(url.pathExtension)
+        let recording = (try? FileManager.default.copyItem(at: url, to: copy)) == nil ? nil : copy
+        let record: CaptureRecord
+        do { record = try store.capture(signature: signature, recording: recording) }
+        catch { recording.map { try? FileManager.default.removeItem(at: $0) }; throw error }
         status = "Capture saved."
         refresh()
         await resume(preferred: record.id)

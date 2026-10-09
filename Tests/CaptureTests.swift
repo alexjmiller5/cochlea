@@ -82,6 +82,7 @@ final class CaptureTests: XCTestCase {
         try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
         let now = Date(timeIntervalSince1970: 1000)
         for retryAfter in ["0", "-1", "nan", "inf", "bad", "Thu, 01 Jan 1970 00:00:00 GMT"] {
+            record.failedDeliveries = 0 // parsing only; backoff has its own test
             try store.deliveryFinished(record, status: 503, data: Data(), retryAfter: retryAfter, now: now)
             XCTAssertEqual(record.nextAttemptAt, Date(timeIntervalSince1970: 1030))
         }
@@ -256,6 +257,111 @@ final class CaptureTests: XCTestCase {
         for data in [Data(), Data("not a signature".utf8), signature.dataRepresentation.prefix(200)] {
             XCTAssertNil(CatalogLimits.trimmed(data))
         }
+    }
+
+    func testNoExactSpotifyMatchIsNotOnSpotifyAndRecheckedDaily() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist", isrc: "XX0000000001"))
+        let now = Date(timeIntervalSince1970: 1000)
+        let noMatch = Data("""
+            {"ok":false,"capture_id":"\(record.id)","spotify_outcome":"not_added","reason":"no_match",\
+            "message":"Could not find Example Song by Example Artist on Spotify","isrc":null}
+            """.utf8)
+        for retryAfter in ["86400", nil] {
+            try store.deliveryFinished(record, status: 422, data: noMatch, retryAfter: retryAfter, now: now)
+            XCTAssertEqual(record.state, .matched, "A song Spotify may add later is kept for the daily recheck")
+            XCTAssertEqual(record.deliveryStatus, .notOnSpotify)
+            XCTAssertEqual(record.nextAttemptAt, now.addingTimeInterval(86400), "Checked once a day, never every 30 seconds")
+            XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                           "Not on Spotify yet, checking daily")
+        }
+        XCTAssertEqual(try CaptureStore(directory: directory).records().first?.deliveryStatus, .notOnSpotify)
+    }
+
+    func testSpotifyRateLimitShowsBusyUntilItsRetryAfter() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        let now = Date(timeIntervalSince1970: 1000)
+        let busy = Data("""
+            {"ok":false,"message":"Spotify is rate limiting; retry later","capture_id":"\(record.id)","spotify_outcome":"not_added"}
+            """.utf8)
+        try store.deliveryFinished(record, status: 503, data: busy, retryAfter: "72000", now: now)
+        XCTAssertEqual(record.deliveryStatus, .spotifyBusy)
+        XCTAssertEqual(record.nextAttemptAt, now.addingTimeInterval(72000))
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Spotify busy, retrying at " + CaptureRecord.retryTime(now.addingTimeInterval(72000), now: now))
+        XCTAssertEqual(record.deliveryLabel(isUploading: true, isOnline: true, connectionIssue: nil, now: now), "Sending to Spotify…")
+        try store.deliveryFinished(record, status: 200, data: Data("{\"ok\":true,\"capture_id\":\"\(record.id)\",\"isrc\":\"XX0000000001\"}".utf8), now: now)
+        XCTAssertEqual(record.state, .delivered)
+        XCTAssertNil(record.deliveryStatus)
+    }
+
+    func testRepeatedFailuresBackOffInsteadOfRetryingEveryThirtySeconds() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        let now = Date(timeIntervalSince1970: 1000)
+        var delays: [TimeInterval] = []
+        for _ in 0..<9 {
+            try store.deliveryFinished(record, status: 0, data: Data(), now: now)
+            delays.append(try XCTUnwrap(record.nextAttemptAt).timeIntervalSince(now))
+        }
+        XCTAssertEqual(delays, [30, 60, 120, 240, 480, 960, 1920, 3600, 3600])
+        XCTAssertEqual(record.deliveryStatus, .retrying)
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Retrying at " + CaptureRecord.retryTime(now.addingTimeInterval(3600), now: now))
+        try store.deliveryFinished(record, status: 401, data: Data(), now: now)
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now), "Needs reconnect")
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: false, connectionIssue: nil, now: now), "Waiting for internet")
+        try store.deliveryFinished(record, status: 200, data: Data("{\"ok\":true,\"capture_id\":\"\(record.id)\",\"isrc\":\"XX0000000001\"}".utf8), now: now)
+        XCTAssertEqual(record.failedDeliveries, 0)
+    }
+
+    func testExportArchiveCarriesEveryRecordingSignatureAndItsMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let clip = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".m4a")
+        try Data("audio".utf8).write(to: clip)
+        let delivered = try store.capture(signature: makeSignature(), recording: clip)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: clip.path), "The store owns the recording")
+        try store.matched(delivered, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist",
+            appleMusicID: "1", shazamURL: "https://www.shazam.com/track/1", isrc: "XX0000000001"))
+        try store.deliveryFinished(delivered, status: 200, data: Data("{\"ok\":true,\"capture_id\":\"\(delivered.id)\",\"isrc\":\"XX0000000001\"}".utf8))
+        let waiting = try store.capture(signature: makeSignature())
+        let stage = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: stage) }
+        try CaptureArchive.stage(store: store, into: stage)
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: stage.appendingPathComponent("captures.json"))) as? [[String: Any]])
+        XCTAssertEqual(manifest.count, 2)
+        let first = try XCTUnwrap(manifest.first { $0["capture_id"] as? String == delivered.id.uuidString.lowercased() })
+        XCTAssertEqual(first["title"] as? String, "Example Song")
+        XCTAssertEqual(first["artist"] as? String, "Example Artist")
+        XCTAssertEqual(first["isrc"] as? String, "XX0000000001")
+        XCTAssertEqual(first["apple_music_id"] as? String, "1")
+        XCTAssertEqual(first["shazam_url"] as? String, "https://www.shazam.com/track/1")
+        XCTAssertEqual(first["state"] as? String, "delivered")
+        XCTAssertEqual(first["spotify_outcome"] as? String, "added")
+        XCTAssertNotNil(first["created_at"] as? String)
+        let recording = try XCTUnwrap(first["recording"] as? String)
+        XCTAssertEqual(try Data(contentsOf: stage.appendingPathComponent(recording)), Data("audio".utf8))
+        XCTAssertTrue(first["signature"] is NSNull, "Delivery removes the signature; the recording stays")
+        let second = try XCTUnwrap(manifest.first { $0["capture_id"] as? String == waiting.id.uuidString.lowercased() })
+        let signature = try XCTUnwrap(second["signature"] as? String)
+        XCTAssertEqual(try Data(contentsOf: stage.appendingPathComponent(signature)), try store.signature(for: waiting))
+        XCTAssertTrue(second["recording"] is NSNull)
+        let archive = try CaptureArchive.make(store: store)
+        defer { try? FileManager.default.removeItem(at: archive) }
+        XCTAssertEqual(archive.pathExtension, "zip")
+        XCTAssertEqual(try Data(contentsOf: archive).prefix(2), Data("PK".utf8))
     }
 
     func testDeliveryRequiresMatchingBodyAcknowledgementAndPreservesMetadataForRetry() throws {
