@@ -142,21 +142,10 @@ private struct CaptureRow: View {
         VStack(alignment: .leading, spacing: 5) {
             Text(record.title ?? "Saved capture").font(.headline)
             if let artist = record.artist { Text(artist).foregroundStyle(.secondary) }
-            HStack {
-                HStack(spacing: 6) {
-                    if record.state == .matched, isUploading, isOnline, connectionIssue == nil, !record.deliveryBlocked {
-                        ProgressView().controlSize(.mini).tint(color)
-                    } else {
-                        Image(icon).resizable().frame(width: 16, height: 16)
-                    }
-                    Text(label).fontWeight(.medium)
-                }
-                .foregroundStyle(color)
-                .padding(.horizontal, 9).padding(.vertical, 6)
-                .background(color.opacity(0.1), in: Capsule())
-                Spacer()
-                Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                    .foregroundStyle(.tertiary)
+            // A long status keeps its pill on one line and moves the date below it.
+            ViewThatFits(in: .horizontal) {
+                HStack { status; Spacer(); captured }
+                VStack(alignment: .leading, spacing: 4) { status; captured }
             }
             .font(.caption)
             if let message = record.lastError, !isUploading {
@@ -164,6 +153,25 @@ private struct CaptureRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var status: some View {
+        HStack(spacing: 6) {
+            if record.state == .matched, isUploading, isOnline, connectionIssue == nil, !record.deliveryBlocked {
+                ProgressView().controlSize(.mini).tint(color)
+            } else {
+                Image(icon).resizable().frame(width: 16, height: 16)
+            }
+            Text(label).fontWeight(.medium)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 9).padding(.vertical, 6)
+        .background(color.opacity(0.1), in: Capsule())
+    }
+
+    private var captured: some View {
+        Text(record.createdAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+            .foregroundStyle(.tertiary)
     }
 
     private var label: String {
