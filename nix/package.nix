@@ -1,7 +1,7 @@
 { lib, stdenvNoCC, fetchurl, unzip
-, version ? "0.6.0"
+, version ? "0.7.0"
 , url ? "https://github.com/alexjmiller5/cochlea/releases/download/v${version}/Cochlea-v${version}.zip"
-, hash ? "sha256-L/8cIHIwqXxr3Ty1JIBTckwT1rebqdPak93A4xTjcww="
+, hash ? "sha256-bNHJKOMjz5uE+cx6crqw9ZBV/yQgF3jMVDo3HXoP6BU="
 }:
 stdenvNoCC.mkDerivation {
   pname = "cochlea";
