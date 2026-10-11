@@ -39,6 +39,8 @@ final class CaptureRecord {
     var deliveryStatusValue: String?
     var failedDeliveries: Int = 0
     var deliveryStartedAt: Date?
+    /// The Soma task Music Sync filed for reconciling a capture Spotify has no exact match for.
+    var reconcileTaskID: String?
 
     var deliveryStatus: DeliveryStatus? {
         get { deliveryStatusValue.flatMap(DeliveryStatus.init(rawValue:)) }
@@ -196,6 +198,7 @@ final class CaptureStore {
             let isrc: String?
             let reason: String?
             let status: String?
+            let task_id: String?
         }
         struct OutcomeReceipt: Decodable {
             let spotify_outcome: String?
@@ -240,6 +243,7 @@ final class CaptureStore {
             } else if trustedReceipt, receipt?.reason == "no_match" {
                 // Definitive until Spotify's catalog changes: check once a day.
                 record.deliveryStatus = .notOnSpotify
+                record.reconcileTaskID = receipt?.task_id
                 record.lastError = "Spotify has no exact match for this recording yet."
                 record.nextAttemptAt = now.addingTimeInterval(max(86400, serverDelay ?? 0))
             } else if status == 503 || status == 429, let serverDelay {
@@ -293,6 +297,7 @@ final class CaptureStore {
             let isrc: String?
             let retry_at: String?
             let reason: String?
+            let task_id: String?
         }
         let view = status == 200 ? try? JSONDecoder().decode(View.self, from: data) : nil
         let serverRetry = view?.retry_at.flatMap(Self.isoDate)
@@ -318,6 +323,7 @@ final class CaptureStore {
         } else if let view, view.capture_id == record.id, view.status == "not_added", view.reason == "no_match" {
             let next = serverRetry ?? now.addingTimeInterval(86400)
             record.deliveryStatus = .notOnSpotify
+            record.reconcileTaskID = view.task_id
             record.spotifyOutcome = .notAdded
             record.failedDeliveries = 0
             record.nextAttemptAt = max(next, now.addingTimeInterval(retryDelay))
@@ -342,18 +348,22 @@ extension CaptureRecord {
         case .unmatched: return "Not identified"
         case .accepted:
             if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
-            return deliveryStatus == .notOnSpotify ? "Not on Spotify (no exact match)" : "Saved to Music Sync"
+            return deliveryStatus == .notOnSpotify ? notOnSpotifyLabel : "Saved to Music Sync"
         case .matched:
             if !isOnline { return "Waiting for internet" }
             if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
             if isUploading { return "Sending to Spotify…" }
             guard let next = nextAttemptAt else { return "Queued for Spotify" }
             switch deliveryStatus {
-            case .notOnSpotify: return "Not on Spotify (no exact match)"
+            case .notOnSpotify: return notOnSpotifyLabel
             case .spotifyBusy: return "Spotify busy, retrying at " + Self.retryTime(next, now: now)
             case .retrying, nil: return "Retrying at " + Self.retryTime(next, now: now)
             }
         }
+    }
+
+    private var notOnSpotifyLabel: String {
+        reconcileTaskID == nil ? "Not on Spotify (no exact match)" : "Not on Spotify, task created for you"
     }
 
     static func retryTime(_ date: Date, now: Date = Date()) -> String {

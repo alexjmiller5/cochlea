@@ -354,13 +354,39 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(mismatched.state, .accepted, "Another capture's status proves nothing")
     }
 
+    func testNotOnSpotifyWithAReconcileTaskSaysATaskWasCreated() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let now = Date(timeIntervalSince1970: 1000)
+        let record = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"), now: now)
+        try store.statusChecked(record, status: 200, data: view(record, status: "not_added", reason: "no_match"), now: now)
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Not on Spotify (no exact match)", "No task yet: the plain daily-recheck state")
+        try store.statusChecked(record, status: 200, data: view(record, status: "not_added", reason: "no_match", taskID: "task-1"), now: now)
+        XCTAssertEqual(record.reconcileTaskID, "task-1")
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Not on Spotify, task created for you")
+        XCTAssertEqual(try CaptureStore(directory: directory).records().first?.reconcileTaskID, "task-1")
+
+        let resent = try store.capture(signature: makeSignature())
+        try store.matched(resent, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        try store.deliveryFinished(resent, status: 422, data: view(resent, status: "not_added", reason: "no_match", taskID: "task-2"),
+                                   retryAfter: "86400", now: now)
+        XCTAssertEqual(resent.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Not on Spotify, task created for you")
+    }
+
     private func view(_ record: CaptureRecord, status: String, isrc: String? = nil, reason: String? = nil,
-                      retryAt: String? = nil) -> Data {
-        let fields: [String: Any] = [
+                      retryAt: String? = nil, taskID: String? = nil) -> Data {
+        var fields: [String: Any] = [
             "ok": status != "not_added", "capture_id": record.id.uuidString.lowercased(), "status": status,
             "spotify_outcome": status == "added" ? "added" : "not_added", "isrc": isrc ?? NSNull(),
             "title": "Example Song", "artist": "Example Artist", "retry_at": retryAt ?? NSNull(), "reason": reason ?? NSNull(),
         ]
+        fields["task_id"] = taskID ?? NSNull()
         return try! JSONSerialization.data(withJSONObject: fields)
     }
 
