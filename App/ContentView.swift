@@ -88,11 +88,21 @@ struct ContentView: View {
                                 let pending = controller.records.filter { $0.state == .pending || $0.state == .matched }.count
                                 if pending > 0 { Text("\(pending) pending").font(.caption).foregroundStyle(.secondary) }
                             }
+                            let recorded = (try? controller.store.recordedIDs()) ?? []
                             ForEach(controller.records.reversed()) { record in
                                 CaptureRow(record: record,
                                            isUploading: controller.uploadingIDs.contains(record.id),
                                            connectionIssue: controller.connectionIssue,
                                            isOnline: controller.isOnline)
+                                .contentShape(Rectangle())
+                                .contextMenu {
+                                    if recorded.contains(record.id) {
+                                        ShareLink(item: RecordingExport(id: record.id),
+                                                  preview: SharePreview(record.title ?? "Saved capture", image: Image("Waveform"))) {
+                                            Label { Text("Share Recording") } icon: { Image("Share") }
+                                        }
+                                    }
+                                }
                                 if record.id != controller.records.first?.id { Divider() }
                             }
                         }

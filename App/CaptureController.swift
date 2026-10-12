@@ -67,6 +67,7 @@ final class CaptureController {
         isRecording = true
         discardRecording = false
         let id = UUID()
+        let heardAt = Date()
         recordingID = id
         defer {
             isRecording = false
@@ -98,7 +99,7 @@ final class CaptureController {
             throw CancellationError()
         }
         do {
-            let record = try store.capture(signature: audio.signature, recording: audio.recording)
+            let record = try store.capture(signature: audio.signature, recording: audio.recording, heardAt: heardAt)
             if let metadata = audio.metadata { try store.matched(record, metadata: metadata) }
             // Shown only once the capture is durable, so "saved" is never a promise.
             await recordingActivity?.finish(showing: audio.metadata.map { .recognized(title: $0.title, artist: $0.artist) }

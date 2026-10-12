@@ -65,6 +65,16 @@ final class IntegrationTests: XCTestCase {
         XCTAssertFalse(String(decoding: body, as: UTF8.self).contains("token"))
     }
 
+    func testUploadSendsTheTimeALiveCaptureWasHeard() throws {
+        let id = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+        let metadata = MatchMetadata(title: "Example Song", artist: "Example Artist")
+        let heard = Date(timeIntervalSince1970: 1_791_811_160.952)
+        let body = try CapturePayload(id: id, metadata: metadata, heardAt: heard).data()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])
+        XCTAssertEqual(json["recognized_at"], "2026-10-12T13:19:20.952Z")
+        XCTAssertEqual(json.count, 6)
+    }
+
     func testRecordedAudioGeneratesASignatureThatMatchesThroughNativeSDK() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".wav")
         defer { try? FileManager.default.removeItem(at: url) }

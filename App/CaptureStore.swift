@@ -20,6 +20,10 @@ enum DeliveryStatus: String {
 final class CaptureRecord {
     @Attribute(.unique) var id: UUID
     var createdAt: Date
+    /// When the music was heard: the start of a live capture's recording. Nil for an
+    /// imported clip and for captures saved before Cochlea sent it; Music Sync then
+    /// estimates, and an already-sent capture keeps the payload it was first sent with.
+    var heardAt: Date?
     var stateValue: String
     var title: String?
     var artist: String?
@@ -110,8 +114,9 @@ final class CaptureStore {
     }
 
     /// Saves a capture; a `recording` file is moved into the store and kept for export.
-    func capture(signature: SHSignature, recording: URL? = nil) throws -> CaptureRecord {
+    func capture(signature: SHSignature, recording: URL? = nil, heardAt: Date? = nil) throws -> CaptureRecord {
         let record = CaptureRecord()
+        record.heardAt = heardAt
         let url = signatureURL(record)
         try signature.dataRepresentation.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         context.insert(record)
@@ -131,6 +136,12 @@ final class CaptureStore {
             }
         }
         return record
+    }
+
+    /// Captures that kept a recording, from one directory listing.
+    func recordedIDs() throws -> Set<UUID> {
+        let files = try FileManager.default.contentsOfDirectory(at: recordingDirectory, includingPropertiesForKeys: nil)
+        return Set(files.compactMap { UUID(uuidString: $0.deletingPathExtension().lastPathComponent) })
     }
 
     func recording(for record: CaptureRecord) -> URL? {

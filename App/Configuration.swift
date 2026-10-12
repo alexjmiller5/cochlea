@@ -56,6 +56,7 @@ enum ConfigurationError: LocalizedError {
 struct CapturePayload {
     let id: UUID
     let metadata: MatchMetadata
+    var heardAt: Date? = nil
     func data() throws -> Data {
         var fields = [
             "capture_id": id.uuidString.lowercased(),
@@ -65,6 +66,11 @@ struct CapturePayload {
             "shazam_url": metadata.shazamURL ?? ""
         ]
         if let isrc = metadata.isrc { fields["isrc"] = isrc }
+        if let heardAt {
+            let time = ISO8601DateFormatter()
+            time.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            fields["recognized_at"] = time.string(from: heardAt)
+        }
         return try JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])
     }
 }

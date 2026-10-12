@@ -92,7 +92,11 @@ final class ControllerTests: XCTestCase {
             }, stop: {}, timeout: cancelNext ? .seconds(15) : .milliseconds(30))
         }, recognize: { _ in nil })
         controller.isOnline = false
+        let before = Date()
         let record = try await controller.capture()
+        let heard = try XCTUnwrap(record.heardAt, "A live capture knows when the music was heard")
+        XCTAssertGreaterThanOrEqual(heard, before)
+        XCTAssertLessThanOrEqual(heard, record.createdAt)
         let kept = try XCTUnwrap(store.recording(for: record))
         XCTAssertGreaterThan(try AVAudioFile(forReading: kept).length, 0)
         XCTAssertFalse(FileManager.default.fileExists(atPath: clips[0].path), "The temporary clip moved into the store")
@@ -228,6 +232,7 @@ final class ControllerTests: XCTestCase {
         do { let file = try AVAudioFile(forWriting: url, settings: format.settings); try file.write(from: buffer) }
         let imported = try await controller.importAudio(url)
         XCTAssertEqual(imported.state, .matched, "An import must not return while excluded from the current pass")
+        XCTAssertNil(imported.heardAt, "An imported clip's listening time is unknown")
         previous.cancel()
         await previous.value
         service.session.finishTasksAndInvalidate()

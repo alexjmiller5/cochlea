@@ -105,7 +105,7 @@ final class DeliveryService: NSObject, URLSessionDataDelegate {
                       record.nextAttemptAt.map({ $0 <= Date() }) ?? true,
                       let metadata = record.metadata else { continue }
                 let file = uploadFile(record.id)
-                try CapturePayload(id: record.id, metadata: metadata).data().write(
+                try CapturePayload(id: record.id, metadata: metadata, heardAt: record.heardAt).data().write(
                     to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 var request = URLRequest(url: configuration.endpoint)
                 request.httpMethod = "POST"

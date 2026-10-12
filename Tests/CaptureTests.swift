@@ -72,6 +72,28 @@ final class CaptureTests: XCTestCase {
         XCTAssertEqual(record.state, .matched)
         XCTAssertEqual(record.nextAttemptAt, deadline)
         XCTAssertFalse(record.deliveryBlocked)
+        // Music Sync refuses a capture ID re-sent with a changed payload, so an
+        // existing capture never gains a recognition time.
+        XCTAssertNil(record.heardAt)
+        let body = try CapturePayload(id: id, metadata: XCTUnwrap(record.metadata), heardAt: record.heardAt).data()
+        XCTAssertNil(try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: String])["recognized_at"])
+    }
+
+    func testOneRecordingExportsUnderTheSongName() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let clip = directory.appendingPathComponent("clip.m4a")
+        try Data("audio".utf8).write(to: clip)
+        let record = try store.capture(signature: makeSignature(), recording: clip)
+        let bare = try store.capture(signature: makeSignature())
+        XCTAssertEqual(try store.recordedIDs(), [record.id])
+        try store.matched(record, metadata: MatchMetadata(title: "AC/DC: Live", artist: "Example Artist"))
+        let file = try RecordingExport.file(for: record, in: store)
+        XCTAssertEqual(file.lastPathComponent, "AC-DC- Live - Example Artist.m4a")
+        XCTAssertEqual(try Data(contentsOf: file), Data("audio".utf8))
+        XCTAssertNotNil(store.recording(for: record), "Exporting copies; the capture keeps its recording")
+        XCTAssertThrowsError(try RecordingExport.file(for: bare, in: store))
     }
 
     func testRetryAfterCannotCauseAnImmediateFailureLoop() throws {

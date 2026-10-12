@@ -28,6 +28,7 @@ enum CaptureArchive {
             }
             let fields: [String: Any?] = [
                 "capture_id": id, "created_at": time.string(from: record.createdAt), "state": record.state.rawValue,
+                "heard_at": record.heardAt.map(time.string(from:)),
                 "title": record.title, "artist": record.artist, "isrc": record.isrc,
                 "apple_music_id": record.appleMusicID, "apple_music_url": record.appleMusicURL, "shazam_url": record.shazamURL,
                 "spotify_outcome": record.spotifyOutcome?.rawValue, "delivery_status": record.deliveryStatus?.rawValue,
@@ -69,5 +70,34 @@ struct CaptureExport: Transferable {
         FileRepresentation(exportedContentType: .zip) { _ in
             SentTransferredFile(try await MainActor.run { try CaptureArchive.make(store: Runtime.controller.get().store) })
         }
+    }
+}
+
+/// One capture's recording under the song's name: the long-press Share Recording action.
+struct RecordingExport: Transferable {
+    let id: UUID
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .audio) { export in
+            SentTransferredFile(try await MainActor.run {
+                let store = try Runtime.controller.get().store
+                guard let record = try store.records().first(where: { $0.id == export.id }) else {
+                    throw CocoaError(.fileNoSuchFile)
+                }
+                return try file(for: record, in: store)
+            })
+        }
+    }
+
+    /// A temporary copy named "Title - Artist"; the capture keeps its own recording.
+    @MainActor static func file(for record: CaptureRecord, in store: CaptureStore) throws -> URL {
+        guard let source = store.recording(for: record) else { throw CocoaError(.fileNoSuchFile) }
+        let name = record.metadata.map { "\($0.title) - \($0.artist)" }
+            ?? "Cochlea capture " + record.createdAt.formatted(.iso8601.year().month().day())
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let safe = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        let copy = folder.appendingPathComponent(safe).appendingPathExtension(source.pathExtension)
+        try FileManager.default.copyItem(at: source, to: copy)
+        return copy
     }
 }
