@@ -90,18 +90,23 @@ struct ContentView: View {
                             }
                             let recorded = (try? controller.store.recordedIDs()) ?? []
                             ForEach(controller.records.reversed()) { record in
-                                CaptureRow(record: record,
-                                           isUploading: controller.uploadingIDs.contains(record.id),
-                                           connectionIssue: controller.connectionIssue,
-                                           isOnline: controller.isOnline)
-                                .contentShape(Rectangle())
-                                .contextMenu {
-                                    if recorded.contains(record.id) {
+                                let row = CaptureRow(record: record,
+                                                     isUploading: controller.uploadingIDs.contains(record.id),
+                                                     connectionIssue: controller.connectionIssue,
+                                                     isOnline: controller.isOnline)
+                                if recorded.contains(record.id) {
+                                    row.contentShape(Rectangle()).contextMenu {
                                         ShareLink(item: RecordingExport(id: record.id),
-                                                  preview: SharePreview(record.title ?? "Saved capture", image: Image("Waveform"))) {
+                                                  preview: SharePreview(record.title ?? "Saved capture", image: Image("Waveform").renderingMode(.original))) {
                                             Label { Text("Share Recording") } icon: { Image("Share") }
                                         }
+                                    } preview: {
+                                        // The lifted row needs its own opaque card, or it shows through.
+                                        row.padding(16).frame(width: 340, alignment: .leading)
+                                            .background(Platform.groupedBackground)
                                     }
+                                } else {
+                                    row
                                 }
                                 if record.id != controller.records.first?.id { Divider() }
                             }
@@ -237,7 +242,7 @@ private struct SettingsView: View {
                          : "This \(Runtime.deviceName)'s connection came from its enrollment link and is stored securely on it.")
                 }
                 Section {
-                    ShareLink(item: CaptureExport(), preview: SharePreview("Cochlea captures", image: Image("Waveform"))) {
+                    ShareLink(item: CaptureExport(), preview: SharePreview("Cochlea captures", image: Image("Waveform").renderingMode(.original))) {
                         Label { Text("Export captures") } icon: { Image("Share").resizable().frame(width: 18, height: 18) }
                     }
                 } header: { Text("Your recordings") } footer: {
