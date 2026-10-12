@@ -24,7 +24,7 @@ deploy: gen
 # Serve a decrypted IPA after verifying both bundles for IOS_TEAM_ID / IOS_DEVICE_ID.
 ota ipa="build/Cochlea.ipa":
     python3 scripts/sign-ios.py --verify-ipa "{{ipa}}"
-    bash scripts/ota-install.sh "{{ipa}}"
+    python3 scripts/ota-install.py "{{ipa}}"
 
 # --- project-specific ---
 mac := "CochleaMac"

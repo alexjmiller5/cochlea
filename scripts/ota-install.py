@@ -1,155 +1,232 @@
 #!/usr/bin/env python3
-"""Temporarily serve a verified IPA over tailnet HTTPS on an unused Serve port."""
-import argparse
-import functools
+"""Over-the-air install page for signed .ipa files, one list per machine.
+
+`ota-install.py <App.ipa>` adds the app to this machine's install page at
+https://<tailnet name>/install/ and prints that URL: the phone opens it in
+Safari (Tailscale connected) and taps Install. Every project and agent on the
+machine shares the page: a new app is appended, a newer build of an app
+already listed replaces its entry, and each entry expires OTA_TTL_HOURS
+(default 48) after it was added. The page server (stdlib http.server behind
+`tailscale serve`) runs as a transient launchd job from a copy of this script
+in the state dir; it prunes expired entries and, once the list is empty,
+removes its `tailscale serve` path and its launchd job.
+
+Env: OTA_TTL_HOURS, OTA_HTTPS_PORT (default 443), XDG_STATE_HOME.
+"""
+
+import fcntl
 import html
 import http.server
 import json
 import os
 import plistlib
-import signal
+import shutil
+import socket
 import subprocess
-import tempfile
+import sys
 import threading
 import time
-import urllib.error
-import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
 
-
-def command(*args):
-    result = subprocess.run(args, capture_output=True, check=False)
-    if result.returncode:
-        raise RuntimeError('Tailscale command failed; check that Tailscale is running')
-    return json.loads(result.stdout)
-
-
-def occupied_ports(config):
-    ports = set()
-    if not isinstance(config, dict):
-        return ports
-    for key, value in config.items():
-        if key == 'TCP':
-            ports.update(int(port) for port in value)
-        elif key in ('Web', 'AllowFunnel'):
-            ports.update(int(host.rsplit(':', 1)[1]) for host in value)
-        elif isinstance(value, dict):
-            ports.update(occupied_ports(value))
-    return ports
+TTL = float(os.environ.get('OTA_TTL_HOURS', '48')) * 3600
+PATH = '/install'
+LABEL = 'ota-install.page'
+STATE = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'ota-install'
+if sys.argv[1:2] == ['serve']:  # the job runs the copy kept in the state dir
+    STATE = Path(__file__).resolve().parent
+BUTTON = ('display:inline-block;padding:16px 28px;border-radius:14px;'
+          'background:#0a84ff;color:#fff;text-decoration:none')
 
 
-def choose_port(config, requested):
-    occupied = occupied_ports(config)
-    candidates = [int(requested)] if requested else [8443, 10000, *range(10001, 10101)]
-    for port in candidates:
-        if not 1 <= port <= 65535:
-            raise ValueError('OTA_HTTPS_PORT must be a valid TCP port')
-        if port not in occupied:
-            return port
-    raise ValueError('Requested HTTPS port is occupied, or no free OTA port is available')
+def read_ipa(ipa):
+    try:
+        with zipfile.ZipFile(ipa) as z:
+            name = next(n for n in z.namelist()
+                        if n.startswith('Payload/') and n.endswith('.app/Info.plist') and n.count('/') == 2)
+            info = plistlib.loads(z.read(name))
+    except (zipfile.BadZipFile, StopIteration):
+        raise SystemExit(f'not an .ipa: no Payload/<App>.app/Info.plist inside {ipa}')
+    return {'bundle': info['CFBundleIdentifier'],
+            'version': info.get('CFBundleShortVersionString', ''),
+            'build': info.get('CFBundleVersion', ''),
+            'title': info.get('CFBundleDisplayName') or info.get('CFBundleName') or info['CFBundleIdentifier']}
 
 
-def write_page(root, base, info):
-    title = info.get('CFBundleDisplayName') or info.get('CFBundleName') or 'App'
-    manifest = {'items': [{'assets': [{'kind': 'software-package', 'url': base + '/app.ipa'}],
-                          'metadata': {'bundle-identifier': info['CFBundleIdentifier'],
-                                       'bundle-version': info['CFBundleVersion'],
-                                       'kind': 'software', 'title': title}}]}
-    (root / 'manifest.plist').write_bytes(plistlib.dumps(manifest))
-    install = 'itms-services://?action=download-manifest&url=' + urllib.parse.quote(base + '/manifest.plist', safe='')
-    (root / 'index.html').write_text(
-        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
-        f'<title>Install {html.escape(title)}</title>'
-        '<body style="font:20px -apple-system;padding:48px 24px;text-align:center">'
-        f'<h2>{html.escape(title)} {html.escape(str(info.get("CFBundleShortVersionString", "")))}</h2>'
-        f'<p><a href="{html.escape(install, quote=True)}">Install</a></p></body>')
+def add(ipa, www, base, now):
+    """Publish (or replace) the app's entry; the bundle id is the entry key."""
+    entry = {**read_ipa(ipa), 'added': now, 'expires': now + TTL}
+    v = int(now)
+    manifest = {'items': [{
+        'assets': [{'kind': 'software-package', 'url': f"{base}/{entry['bundle']}/app.ipa?v={v}"}],
+        'metadata': {'bundle-identifier': entry['bundle'], 'bundle-version': entry['version'],
+                     'kind': 'software', 'title': entry['title']}}]}
+    www.mkdir(parents=True, exist_ok=True)
+    staging = www / f".{entry['bundle']}.{os.getpid()}"
+    staging.mkdir()
+    shutil.copyfile(ipa, staging / 'app.ipa')
+    (staging / 'manifest.plist').write_bytes(plistlib.dumps(manifest))
+    (staging / 'entry.json').write_text(json.dumps(entry))
+    final = www / entry['bundle']
+    if final.exists():
+        old = www / f".{entry['bundle']}.old.{os.getpid()}"
+        final.rename(old)
+        staging.rename(final)
+        shutil.rmtree(old)
+    else:
+        staging.rename(final)
+    return entry
 
 
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *_):
-        pass
+def entries(www):
+    found = []
+    for meta in Path(www).glob('*/entry.json'):
+        try:
+            found.append(json.loads(meta.read_text()))
+        except (OSError, ValueError):
+            continue  # being replaced right now
+    return sorted(found, key=lambda e: e['added'], reverse=True)
 
-    def end_headers(self):
-        self.send_header('Cache-Control', 'no-store')
-        super().end_headers()
+
+def prune(www, now):
+    removed = []
+    for e in entries(www):
+        if now > e['expires']:
+            shutil.rmtree(Path(www) / e['bundle'], ignore_errors=True)
+            removed.append(e['bundle'])
+    return removed
 
 
-def serve(ipa):
-    ttl = int(os.environ.get('OTA_TTL', '900'))
-    if ttl <= 0:
-        raise ValueError('OTA_TTL must be positive')
-    status = command('tailscale', 'status', '--json')
+def render_index(listed, base):
+    sections = ''.join(
+        f"<section><h2>{html.escape(e['title'])} {html.escape(e['version'])}</h2>"
+        f"<p><a style=\"{BUTTON}\" href=\"itms-services://?action=download-manifest&amp;"
+        f"url={base}/{e['bundle']}/manifest.plist?v={int(e['added'])}\">Install</a></p></section>"
+        for e in listed) or '<p>Nothing to install right now.</p>'
+    return ('<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Install</title><body style="font:20px -apple-system;padding:48px 24px;text-align:center">'
+            f'{sections}</body>')
+
+
+def make_server(www, base, port):
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kw):
+            super().__init__(*args, directory=str(www), **kw)
+
+        def send_body(self, body, kind):
+            data = body.encode()
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            route = self.path.split('?')[0]
+            if route == '/healthz':
+                return self.send_body('ota-install', 'text/plain')
+            if route in ('/', '/index.html'):
+                prune(www, time.time())
+                return self.send_body(render_index(entries(www), base), 'text/html; charset=utf-8')
+            return super().do_GET()
+
+        def list_directory(self, path):
+            self.send_error(404)
+
+        def log_message(self, *args):
+            pass
+
+    return http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
+
+
+def healthy(port):
+    try:
+        return urllib.request.urlopen(f'http://127.0.0.1:{port}/healthz', timeout=2).read() == b'ota-install'
+    except OSError:
+        return False
+
+
+def serve(config):
+    """The launchd job: serve until the list is empty, then take itself down."""
+    www = STATE / 'www'
+    server = make_server(www, config['base'], config['port'])
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    while True:
+        time.sleep(600)
+        with open(STATE / 'lock', 'w') as lock:  # an add waits, then restarts the page
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            prune(www, time.time())
+            if not entries(www):
+                subprocess.run([config['tailscale'], 'serve', f"--https={config['https_port']}",
+                                '--set-path', PATH, 'off'], capture_output=True)
+                subprocess.run(['/bin/launchctl', 'remove', LABEL], capture_output=True)  # ends this process
+
+
+def tailnet_base(tailscale, https_port):
+    status = json.loads(subprocess.check_output([tailscale, 'status', '--json']))
     host = status['Self']['DNSName'].rstrip('.')
     if not host:
-        raise ValueError('Tailscale HTTPS DNS name is unavailable')
-    port = choose_port(command('tailscale', 'serve', 'status', '--json'), os.environ.get('OTA_HTTPS_PORT'))
-    base = f'https://{host}' + (f':{port}' if port != 443 else '')
-    with tempfile.TemporaryDirectory(prefix='cochlea-ota-') as temporary:
-        root = Path(temporary)
-        with zipfile.ZipFile(ipa) as archive:
-            infos = [name for name in archive.namelist()
-                     if name.startswith('Payload/') and name.endswith('.app/Info.plist') and name.count('/') == 2]
-            if len(infos) != 1:
-                raise ValueError('Expected one app Info.plist in the IPA')
-            info = plistlib.loads(archive.read(infos[0]))
-        # A private temporary link avoids a second plaintext IPA copy.
-        (root / 'app.ipa').symlink_to(ipa.resolve())
-        write_page(root, base, info)
-        with http.server.ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(Handler, directory=str(root))) as server:
-            threading.Thread(target=server.serve_forever, daemon=True).start()
-            process = None
-            try:
-                # Check again immediately before starting. Never use --yes, --bg, reset or off.
-                choose_port(command('tailscale', 'serve', 'status', '--json'), str(port))
-                process = subprocess.Popen(
-                    ['tailscale', 'serve', '--bg=false', f'--https={port}', f'http://127.0.0.1:{server.server_port}'],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                expected = (root / 'manifest.plist').read_bytes()
-                for _ in range(30):
-                    if process.poll() is not None:
-                        raise RuntimeError('Tailscale Serve exited before the page was ready')
-                    try:
-                        with urllib.request.urlopen(base + '/manifest.plist', timeout=2) as response:
-                            if response.read() == expected:
-                                break
-                    except (urllib.error.URLError, TimeoutError):
-                        pass
-                    time.sleep(1)
-                else:
-                    raise RuntimeError('OTA HTTPS page did not become ready')
-                print(f'Install page: {base}/', flush=True)
-                print(f'Open in Safari on the tailnet-connected phone. Serving for {ttl}s; Ctrl-C stops it.', flush=True)
-                deadline = time.monotonic() + ttl
-                while time.monotonic() < deadline:
-                    if process.poll() is not None:
-                        raise RuntimeError('Tailscale Serve stopped unexpectedly')
-                    time.sleep(min(1, max(0, deadline - time.monotonic())))
-            finally:
-                if process is not None and process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
-                server.shutdown()
+        raise SystemExit('this machine has no tailnet DNS name (is tailscale up, with HTTPS certificates enabled?)')
+    return f'https://{host}' + ('' if https_port == '443' else f':{https_port}') + PATH
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('ipa', type=Path)
-    args = parser.parse_args()
-    os.umask(0o077)
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(SystemExit(143)))
-    try:
-        serve(args.ipa)
-    except KeyboardInterrupt:
-        pass
-    except (ValueError, RuntimeError, OSError, KeyError, zipfile.BadZipFile):
-        raise SystemExit('OTA failed; check the verified IPA, Tailscale HTTPS, and port availability.') from None
+def ensure_page(tailscale, https_port, base):
+    """Start the page server if it is not running and route /install to it."""
+    config_file = STATE / 'config.json'
+    config = json.loads(config_file.read_text()) if config_file.exists() else {}
+    if not healthy(config.get('port', 0)):
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            port = s.getsockname()[1]
+        config = {'port': port, 'base': base, 'tailscale': tailscale, 'https_port': https_port}
+        config_file.write_text(json.dumps(config))
+        shutil.copyfile(__file__, STATE / 'ota-install.py')  # never run a job from a checkout
+        subprocess.run(['/bin/launchctl', 'remove', LABEL], capture_output=True)
+        log = str(STATE / 'server.log')
+        subprocess.run(['/bin/launchctl', 'submit', '-l', LABEL, '-o', log, '-e', log, '--',
+                        sys.executable, str(STATE / 'ota-install.py'), 'serve'], check=True)
+        for _ in range(20):
+            if healthy(port):
+                break
+            time.sleep(0.5)
+        else:
+            raise SystemExit(f'the install page server did not start; see {log}')
+    subprocess.run([tailscale, 'serve', '--bg', f'--https={https_port}', '--set-path', PATH,
+                    f"http://127.0.0.1:{config['port']}"], check=True, capture_output=True)
+    for _ in range(30):
+        try:
+            if urllib.request.urlopen(f'{base}/', timeout=5).status == 200:
+                return
+        except OSError:
+            pass
+        time.sleep(1)
+    raise SystemExit(f'the install page never came up at {base}/ (tailscale serve failed?)')
+
+
+def main(argv):
+    if argv[1:2] == ['serve']:
+        return serve(json.loads((STATE / 'config.json').read_text()))
+    if len(argv) != 2:
+        raise SystemExit('usage: ota-install.py <path/to/App.ipa>')
+    ipa = Path(argv[1])
+    if not ipa.is_file():
+        raise SystemExit(f'no such file: {ipa}')
+    tailscale = shutil.which('tailscale') or sys.exit('tailscale CLI not found')
+    https_port = os.environ.get('OTA_HTTPS_PORT', '443')
+    base = tailnet_base(tailscale, https_port)
+    STATE.mkdir(parents=True, exist_ok=True)
+    with open(STATE / 'lock', 'w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        prune(STATE / 'www', time.time())
+        entry = add(ipa, STATE / 'www', base, time.time())
+        ensure_page(tailscale, https_port, base)
+    hours = TTL / 3600
+    print(f'install page: {base}/')
+    print(f"open it in Safari on the phone (tailnet connected) and tap Install - "
+          f"{entry['title']} {entry['version']}, listed for {hours:g}h")
 
 
 if __name__ == '__main__':
-    main()
+    main(sys.argv)
