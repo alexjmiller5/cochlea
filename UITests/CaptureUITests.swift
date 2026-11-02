@@ -1,6 +1,29 @@
 import XCTest
 
 final class CaptureUITests: XCTestCase {
+    func testTerminalUnavailableResultSurvivesRelaunch() throws {
+        let environment = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(environment["COCHLEA_TEST_TERMINAL_SIMULATOR"] != nil &&
+                          environment["COCHLEA_TEST_TERMINAL_SIMULATOR"] == environment["SIMULATOR_UDID"],
+                          "Seed the terminal receipt fixture on an explicit disposable simulator first")
+        let app = XCUIApplication()
+        defer { app.terminate() }
+        for launch in 1...2 {
+            app.launch()
+            allowSystemPrompts()
+            let row = app.descendants(matching: .any).matching(NSPredicate(
+                format: "label CONTAINS %@ AND label CONTAINS %@",
+                "Terminal fixture song", "Not available on Spotify")).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+            for _ in 0..<3 where !row.isHittable { app.swipeUp() }
+            XCTAssertTrue(row.isHittable)
+            XCTAssertFalse(row.label.contains("Saved to Music Sync"))
+            XCTAssertFalse(row.label.contains("checks Spotify again"))
+            attach(app, "Terminal receipt - launch \(launch)")
+            app.terminate()
+        }
+    }
+
     func testAccidentalCaptureCanBeCanceledAndStartedAgain() throws {
         let app = XCUIApplication()
         app.launch()

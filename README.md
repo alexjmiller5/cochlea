@@ -6,7 +6,7 @@ Identify music on an iPhone or Mac as you listen with Apple's ShazamKit. Offline
 
 1. Open the enrollment link Music Sync's operator sends you (`just clients issue "<device>"` in the music-sync repo) on the phone and tap **Open in Cochlea**. The app checks that Music Sync accepts the connection and stores it in the iOS Keychain; Settings shows which service it is connected to and can disconnect, but the URL and token are never typed in. Allow microphone access and song notifications when prompted.
 2. Tap **Capture song**, or use the **Capture song** App Shortcut. Shazam listens and stops recording as soon as it identifies the song. If there is no early match, the app saves the first 12 seconds as a Shazam signature for later identification (Shazam accepts saved signatures of 3 to 12 seconds); recordings shorter than 3 seconds are discarded.
-3. Check recent captures for their status: saved for identification, **Sending to Spotify…** (only during the upload itself), **Saved to Music Sync** (Music Sync holds it and adds it to Spotify from its own queue), **Not on Spotify (no exact match)** with Music Sync's next check, **Not on Spotify, task created for you** once Music Sync has filed a task for you to reconcile it, **Spotify busy, retrying at** a time, **Retrying at** a time, **Needs reconnect**, **Waiting for internet**, confirmed **Added to Spotify**, or **Not identified** with the reason. There is no manual sync step. Saving a connection automatically starts delivery of already identified songs.
+3. Check recent captures for their status: saved for identification, **Sending to Spotify…** (only during the upload itself), **Saved to Music Sync** (Music Sync holds it and adds it to Spotify from its own queue), **Not on Spotify (no exact match)** with Music Sync's next check, **Not available on Spotify** when Music Sync has finished checking without an addition (kept locally without further polling), **Not on Spotify, task created for you** once Music Sync has filed a task for you to reconcile it, **Spotify busy, retrying at** a time, **Retrying at** a time, **Needs reconnect**, **Waiting for internet**, confirmed **Added to Spotify**, or **Not identified** with the reason. There is no manual sync step. Saving a connection automatically starts delivery of already identified songs.
 4. **Settings > Export captures** shares one zip with every capture's recording, its Shazam signature (until delivery) and `captures.json`: capture ID, timestamps, title, artist, ISRC, Apple Music ID and URL, Shazam URL, delivery state, Spotify outcome and last error.
 
 On iOS 18+, the capture Shortcut records in the background with a Live Activity. iOS 17 opens the app to use the microphone. For an existing audio-recording Shortcut, add the **Save audio capture** action after **Record Audio**, passing its audio output. Clips must be 3 to 30 seconds and at most 16 MiB; only the first 12 seconds are used. This action waits for signature persistence and a bounded recognition pass before returning; it does not launch detached recognition work.
@@ -15,7 +15,7 @@ A saved signature longer than 12 seconds is cut to its first 12 seconds before i
 
 Live recognition receives the same microphone audio used to generate the offline signature. Captures and recognized metadata are stored before reporting success. A new match is displayed and queued for Spotify delivery before older recognition work. Saved-signature recognition processes at most three captures per invocation, with the new capture first, and queues each match for delivery as it is found. A larger backlog continues on subsequent use. Delivery uses file-backed background URLSession uploads, following the same native iOS mechanism used by Receptor. iOS may continue an enrolled upload while the app is suspended. Recognition of an offline signature needs the app to run again; reconnecting while it stays closed does not guarantee immediate recognition. Swiping the app away cancels background transfers. Running Capture song again explicitly launches the app process in the background on iOS 18+ and resumes saved work; passive reconnect alone cannot override a force quit.
 
-Shazam provides recognition. No Mac or replacement recognition provider is required. When Shazam supplies an ISRC, Music Sync requires that exact recording on Spotify. Otherwise, it uses conservative title and artist matching. A missing Spotify match remains pending rather than adding a different recording.
+Shazam provides recognition. No Mac or replacement recognition provider is required. When Shazam supplies an ISRC, Music Sync requires that exact recording on Spotify. Otherwise, it uses conservative title and artist matching. An exact-match miss follows Music Sync's retry decision rather than adding a different recording.
 
 ## Develop and install
 
@@ -64,3 +64,25 @@ Releasing the Mac app = pushing a tag `vX.Y.Z`: `.github/workflows/release.yml` 
 The app accepts `cochlea://enroll` links and compatible `offlineshazam://enroll` links. `cochlea://capture` (or `offlineshazam://capture`) runs **Capture song**, the same action as the Shortcut, Control and menu-bar item, so a global hotkey can start a capture: `open -g cochlea://capture` on the Mac records without opening a window or taking focus (the menu-bar item shows the result and the recognition notification names the song); on iOS the link opens the app, which records in the foreground. A link that arrives while a capture is recording leaves it running. Its shipped bundle identifiers stay stable so updates retain Keychain access and permissions. Existing queues and signature files are moved together to the `cochlea` Application Support directory on first launch.
 
 On iOS 18+, add the native **Capture song** control to the Lock Screen or Control Center. Touch and hold the Lock Screen, choose **Customize**, remove the flashlight control, and select **Cochlea - Capture song**. It uses the same capture action and Dynamic Island result as the built-in App Shortcut.
+
+
+## Terminal receipt regression
+
+Use a fresh disposable iPhone simulator for the synthetic terminal-result UI check.
+The fixture refuses any other simulator or an existing capture queue, does not enroll
+an account and retains its synthetic capture only in that simulator. With its UDID in
+`SIMULATOR_UDID`, generate the project, then run:
+
+```sh
+TEST_RUNNER_COCHLEA_TEST_TERMINAL_SIMULATOR="$SIMULATOR_UDID" \
+xcodebuild -project Cochlea.xcodeproj -scheme Cochlea \
+  -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+  CODE_SIGN_IDENTITY=- -parallel-testing-enabled NO test \
+  -only-testing:CochleaTests/TerminalReceiptUIFixtureTests \
+  -only-testing:CochleaUITests/CaptureUITests/testTerminalUnavailableResultSurvivesRelaunch
+```
+
+The app-host fixture applies the capture-only HTTP contract through `CaptureStore`;
+the UI check verifies the visible result across relaunch and attaches both screenshots.
+`CaptureTests`, `DeliveryTests` and `SpotifyOutcomeTests` cover persistence, queue
+exclusion, retryable results, identity checks and one-time notification behavior.

@@ -194,7 +194,8 @@ private struct CaptureRow: View {
     }
 
     private var needsAttention: Bool {
-        record.awaitsSpotify && (record.deliveryBlocked || connectionIssue != nil || record.deliveryStatus == .notOnSpotify)
+        record.state == .notAdded ||
+            (record.awaitsSpotify && (record.deliveryBlocked || connectionIssue != nil || record.deliveryStatus == .notOnSpotify))
     }
 
     private var color: Color {

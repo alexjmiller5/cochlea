@@ -245,6 +245,34 @@ final class DeliveryTests: XCTestCase {
         XCTAssertEqual(acceptedWhileChecked, [true, true], "No row spins after the upload")
     }
 
+    func testTerminalUnavailableStatusIsNotPolledAgainOnConnectionRefresh() async throws {
+        let fixture = try DeliveryFixture()
+        defer { fixture.cleanUp() }
+        let id = fixture.record.id.uuidString.lowercased()
+        let queued = Data(#"{"ok":true,"capture_id":"\#(id)","status":"queued"}"#.utf8)
+        let unavailable = Data(#"{"capture_id":"\#(id)","status":"not_added","spotify_outcome":"not_added","reason":"unavailable","retry_at":null}"#.utf8)
+        try fixture.store.deliveryFinished(fixture.record, status: 202, data: queued, now: .distantPast)
+        var checks = 0
+        var uploads = 0
+        CaptureHTTPStub.response = { request in
+            if request.httpMethod == "GET" {
+                checks += 1
+                return (200, [:], unavailable)
+            }
+            uploads += 1
+            return (202, [:], queued)
+        }
+        try await fixture.service.enqueue()
+        XCTAssertEqual(checks, 1)
+        XCTAssertFalse(fixture.record.awaitsSpotify)
+        XCTAssertNil(fixture.record.nextAttemptAt)
+        XCTAssertEqual(fixture.record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil),
+                       "Not available on Spotify")
+        try await fixture.service.connectionChanged()
+        XCTAssertEqual(checks, 1, "Refreshing the connection must not restart a terminal status check")
+        XCTAssertEqual(uploads, 0, "An acknowledged terminal capture must not be uploaded again")
+    }
+
     func testUploadsGiveUpAfterFiveMinutesSoTheAppDecidesTheRetry() throws {
         let fixture = try DeliveryFixture()
         defer { fixture.cleanUp() }

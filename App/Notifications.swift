@@ -42,7 +42,7 @@ final class CaptureNotifications {
         }
         let (pending, delivered) = await existingRequests()
         guard let records = try? store.records() else { return }
-        for record in records where record.state == .matched || record.state == .accepted || record.state == .delivered {
+        for record in records where record.state == .matched || record.state == .accepted || record.state == .delivered || record.state == .notAdded {
             let identifier = "capture." + record.id.uuidString
             let legacyPending = pending.contains {
                 $0.identifier == identifier && $0.content.userInfo["stage"] as? String == "delivered"
@@ -102,7 +102,7 @@ final class CaptureNotifications {
                                       existing: [UNNotificationRequest]) async {
         let identifier = "capture.spotify-failure." + record.id.uuidString
         // A queued 202 carries no not_added proof; Music Sync's later no-match does.
-        guard record.awaitsSpotify, record.spotifyOutcome == .notAdded,
+        guard record.awaitsSpotify || record.state == .notAdded, record.spotifyOutcome == .notAdded,
               let metadata = record.metadata else {
             center.removePendingNotificationRequests(withIdentifiers: [identifier])
             return
@@ -116,8 +116,10 @@ final class CaptureNotifications {
             guard record.spotifyFailureNotificationDate == nil else { return }
             let content = UNMutableNotificationContent()
             content.title = "Couldn't add to Spotify"
-            content.body = metadata.title + " by " + metadata.artist +
-                ". Saved for retry. Open Cochlea to check delivery."
+            let detail = record.state == .notAdded
+                ? ". Music Sync finished checking. Open Cochlea for details."
+                : ". Saved for retry. Open Cochlea to check delivery."
+            content.body = metadata.title + " by " + metadata.artist + detail
             content.sound = .default
             content.interruptionLevel = .active
             content.userInfo = ["captureID": record.id.uuidString, "stage": "spotify_not_added"]

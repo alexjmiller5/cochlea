@@ -4,7 +4,7 @@ import SwiftData
 
 enum CaptureState: String, Codable {
     // accepted: Music Sync stored the capture and adds it to Spotify from its own queue.
-    case pending, matched, accepted, delivered, unmatched
+    case pending, matched, accepted, delivered, unmatched, notAdded = "not_added"
 }
 
 enum SpotifyOutcome: String {
@@ -331,6 +331,18 @@ final class CaptureStore {
         } else if let view, view.capture_id == record.id, view.status == "added",
                   let isrc = view.isrc, Self.confirms(isrc, record) {
             markDelivered(record)
+        } else if let view, view.capture_id == record.id, view.status == "not_added",
+                  view.reason == "unavailable", view.retry_at == nil,
+                  record.spotifyOutcome != .added, record.spotifyOutcome != .unknown {
+            record.state = .notAdded
+            record.spotifyOutcome = .notAdded
+            record.deliveryStatus = nil
+            record.reconcileTaskID = view.task_id
+            record.nextAttemptAt = nil
+            record.failedDeliveries = 0
+            record.deliveryBlocked = false
+            record.deliveryStartedAt = nil
+            record.lastError = "Music Sync could not add this song to Spotify."
         } else if let view, view.capture_id == record.id, view.status == "not_added", view.reason == "no_match" {
             let next = serverRetry ?? now.addingTimeInterval(86400)
             record.deliveryStatus = .notOnSpotify
@@ -357,6 +369,7 @@ extension CaptureRecord {
         case .pending: return "Saved for identification"
         case .delivered: return "Added to Spotify"
         case .unmatched: return "Not identified"
+        case .notAdded: return "Not available on Spotify"
         case .accepted:
             if deliveryBlocked || connectionIssue != nil { return "Needs reconnect" }
             return deliveryStatus == .notOnSpotify ? notOnSpotifyLabel : "Saved to Music Sync"

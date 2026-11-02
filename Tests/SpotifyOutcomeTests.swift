@@ -172,6 +172,22 @@ final class SpotifyOutcomeTests: XCTestCase {
         XCTAssertEqual(requests.map(\.content.title), ["Song recognized", "Couldn't add to Spotify"])
     }
 
+    func testTerminalUnavailableAlertsOnceWithoutLosingRecognitionOrPromisingARetry() async throws {
+        let (store, record) = try fixture()
+        let id = record.id.uuidString.lowercased()
+        try store.deliveryFinished(record, status: 202,
+                                   data: Data(#"{"ok":true,"capture_id":"\#(id)","status":"queued"}"#.utf8))
+        try store.statusChecked(record, status: 200,
+                                data: Data(#"{"capture_id":"\#(id)","status":"not_added","spotify_outcome":"not_added","reason":"unavailable","retry_at":null}"#.utf8))
+        var requests: [UNNotificationRequest] = []
+        let notifications = notifier { requests.append($0) }
+        await notifications.reconcile(store: store)
+        await notifications.reconcile(store: store)
+        await notifications.reconcile(store: try CaptureStore(directory: directory))
+        XCTAssertEqual(requests.map(\.content.title), ["Song recognized", "Couldn't add to Spotify"])
+        XCTAssertFalse(requests.last?.content.body.contains("Saved for retry") ?? true)
+    }
+
     private func notifier(schedule: @escaping (UNNotificationRequest) async throws -> Void) -> CaptureNotifications {
         CaptureNotifications(authorization: { .authorized }, schedule: schedule, existingRequests: { ([], []) })
     }

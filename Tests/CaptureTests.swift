@@ -401,6 +401,92 @@ final class CaptureTests: XCTestCase {
                        "Not on Spotify, task created for you")
     }
 
+    func testTerminalUnavailableReceiptKeepsRecognitionAndStopsRetryingAfterReopen() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        let metadata = MatchMetadata(title: "Example Song", artist: "Example Artist", isrc: "XX0000000001")
+        try store.matched(record, metadata: metadata)
+        let signature = try store.signature(for: record)
+        let now = Date(timeIntervalSince1970: 1000)
+        try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"), now: now)
+        try store.statusChecked(record, status: 200,
+                                data: view(record, status: "not_added", reason: "no_match"), now: now)
+        try store.statusChecked(record, status: 200,
+                                data: view(record, status: "not_added", reason: "unavailable"), now: now)
+
+        let reopened = try CaptureStore(directory: directory)
+        let retained = try XCTUnwrap(reopened.records().first { $0.id == record.id })
+        XCTAssertEqual(retained.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil, now: now),
+                       "Not available on Spotify")
+        XCTAssertFalse(retained.awaitsSpotify)
+        XCTAssertNil(retained.nextAttemptAt)
+        XCTAssertEqual(retained.spotifyOutcome, .notAdded)
+        XCTAssertEqual(retained.title, metadata.title)
+        XCTAssertEqual(retained.artist, metadata.artist)
+        XCTAssertEqual(retained.isrc, metadata.isrc)
+        XCTAssertEqual(try reopened.signature(for: retained), signature)
+        XCTAssertFalse(retained.lastError?.contains("checks Spotify again") ?? false)
+    }
+
+    func testUnavailableWithARetryAndNoMatchRemainRetryable() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let now = Date(timeIntervalSince1970: 1000)
+        for (reason, retryAt) in [("no_match", nil), ("unavailable", "1970-01-02T00:00:00.000Z"),
+                                 ("unavailable", "invalid-date")] as [(String, String?)] {
+            let record = try store.capture(signature: makeSignature())
+            try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+            try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"), now: now)
+            try store.statusChecked(record, status: 200,
+                                    data: view(record, status: "not_added", reason: reason, retryAt: retryAt), now: now)
+            XCTAssertTrue(record.awaitsSpotify)
+            XCTAssertEqual(record.state, .accepted)
+            XCTAssertGreaterThan(try XCTUnwrap(record.nextAttemptAt), now)
+            if reason == "no_match" {
+                XCTAssertEqual(record.deliveryStatus, .notOnSpotify)
+                XCTAssertEqual(record.nextAttemptAt, now.addingTimeInterval(86400))
+            } else if retryAt != "invalid-date" {
+                XCTAssertEqual(record.nextAttemptAt, Date(timeIntervalSince1970: 86400))
+            }
+        }
+    }
+
+    func testUnavailableReceiptForAnotherCaptureCannotStopPolling() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        let record = try store.capture(signature: makeSignature())
+        let other = try store.capture(signature: makeSignature())
+        try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+        let now = Date(timeIntervalSince1970: 1000)
+        try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"), now: now)
+        try store.statusChecked(record, status: 200,
+                                data: view(other, status: "not_added", reason: "unavailable"), now: now)
+        XCTAssertTrue(record.awaitsSpotify)
+        XCTAssertNotNil(record.nextAttemptAt)
+        XCTAssertEqual(record.deliveryLabel(isUploading: false, isOnline: true, connectionIssue: nil), "Saved to Music Sync")
+    }
+
+    func testUnavailableCannotDowngradeAnAddedOrUnknownOutcome() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try CaptureStore(directory: directory)
+        for outcome in [SpotifyOutcome.added, .unknown] {
+            let record = try store.capture(signature: makeSignature())
+            try store.matched(record, metadata: MatchMetadata(title: "Example Song", artist: "Example Artist"))
+            try store.deliveryFinished(record, status: 202, data: view(record, status: "queued"))
+            record.spotifyOutcome = outcome
+            try store.save()
+            try store.statusChecked(record, status: 200,
+                                    data: view(record, status: "not_added", reason: "unavailable"))
+            XCTAssertEqual(record.spotifyOutcome, outcome)
+            XCTAssertTrue(record.awaitsSpotify)
+        }
+    }
+
     private func view(_ record: CaptureRecord, status: String, isrc: String? = nil, reason: String? = nil,
                       retryAt: String? = nil, taskID: String? = nil) -> Data {
         var fields: [String: Any] = [
