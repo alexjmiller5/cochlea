@@ -43,3 +43,10 @@ The shipped app and extension bundle identifiers remain `com.alexmiller.offline-
 checks precede application publication and the exact non-zap cask removal precedes
 Homebrew cleanup. Keep the cask publisher available for Homebrew consumers.
 Migration receipts and runtime data never belong in source.
+
+## Install page icons
+
+The shared OTA install publisher embeds one composed phone-and-download SVG
+master and its opaque 180/192/512-pixel home-screen renders. Icon links use
+the configured install base URL; verify routes and install links with
+`python3 -B scripts/ota_install_test.py`. The publisher stays self-contained.
